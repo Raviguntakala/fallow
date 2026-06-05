@@ -28,6 +28,7 @@ pub mod iconify;
 pub mod inventory;
 pub mod mdx;
 mod parse;
+pub mod python;
 pub mod sfc;
 mod sfc_template;
 mod source_map;
