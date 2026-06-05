@@ -37,9 +37,7 @@ use fallow_types::discover::FileId;
 
 /// Whether `path` is a Python source or stub file.
 pub fn is_python_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| ext == "py" || ext == "pyi")
+    fallow_types::path_util::is_python_file(path)
 }
 
 /// Convert a Ruff `TextRange` (u32-backed byte offsets) into an oxc [`Span`].

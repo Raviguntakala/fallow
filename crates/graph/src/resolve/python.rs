@@ -35,9 +35,7 @@ use super::{ResolvedImport, ResolvedReExport};
 
 /// Whether `path` is a Python source or stub file (resolution dispatch).
 pub(super) fn is_python_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| ext == "py" || ext == "pyi")
+    fallow_types::path_util::is_python_file(path)
 }
 
 /// Resolve every Python import for one module against the project file index.
@@ -109,47 +107,35 @@ fn climb_base(dir: &Path, level: usize) -> Option<PathBuf> {
 }
 
 /// Resolve a single Python import to a [`ResolveResult`].
+///
+/// `from . import NAME` (pure leading dots, no module) is the one form whose
+/// target lives in the imported *name* rather than the source, so it is
+/// special-cased to prefer `NAME` as a submodule. Every other form — relative
+/// `from .mod`, `from ..pkg`, and absolute imports — resolves its source via
+/// [`resolve_python_specifier`].
 fn resolve_python_import<F: Fn(&Path) -> Option<FileId>>(
     importing_file: &Path,
     import: &ImportInfo,
     lookup: &F,
 ) -> ResolveResult {
-    let dir = importing_file.parent().unwrap_or_else(|| Path::new(""));
     let source = import.source.as_str();
     let leading_dots = source.chars().take_while(|c| *c == '.').count();
 
-    if leading_dots > 0 {
-        let module = &source[leading_dots..];
-        resolve_relative(dir, leading_dots, module, import, lookup)
-            .unwrap_or_else(|| ResolveResult::Unresolvable(source.to_string()))
-    } else {
-        resolve_absolute(dir, source, lookup)
-    }
-}
-
-/// Resolve a relative import (`from . import x`, `from ..pkg import y`).
-fn resolve_relative<F: Fn(&Path) -> Option<FileId>>(
-    importing_dir: &Path,
-    level: usize,
-    module: &str,
-    import: &ImportInfo,
-    lookup: &F,
-) -> Option<ResolveResult> {
-    // Level 1 is the current package directory; each extra dot climbs a parent.
-    let base = climb_base(importing_dir, level)?;
-
-    if module.is_empty() {
-        // `from . import NAME` — NAME is most often a submodule file; fall back
-        // to a name re-exported from the package's `__init__.py`.
-        if let ImportedName::Named(name) = &import.imported_name
+    if leading_dots > 0
+        && source[leading_dots..].is_empty()
+        && let ImportedName::Named(name) = &import.imported_name
+    {
+        let dir = importing_file.parent().unwrap_or_else(|| Path::new(""));
+        if let Some(base) = climb_base(dir, leading_dots)
             && let Some(id) = resolve_module_file(&base, name, lookup)
         {
-            return Some(ResolveResult::InternalModule(id));
+            return ResolveResult::InternalModule(id);
         }
-        return resolve_package_init(&base, lookup).map(ResolveResult::InternalModule);
+        // Fall through: `resolve_python_specifier(".")` resolves the package
+        // `__init__`, the re-exported-name fallback.
     }
 
-    resolve_module_file(&base, module, lookup).map(ResolveResult::InternalModule)
+    resolve_python_specifier(importing_file, source, lookup)
 }
 
 /// Resolve an absolute import against the importing file's import root.
@@ -203,10 +189,12 @@ fn resolve_module_file<F: Fn(&Path) -> Option<FileId>>(
 ) -> Option<FileId> {
     let module_dir = push_dotted(base, dotted);
 
+    // Reuse one buffer: `set_extension` overwrites the previous extension in
+    // place, so `.py` then `.pyi` is probed without re-allocating per attempt.
+    let mut candidate = module_dir.clone();
     for ext in MODULE_EXTENSIONS {
-        let mut as_module = module_dir.clone();
-        as_module.set_extension(ext);
-        if let Some(id) = lookup(&as_module) {
+        candidate.set_extension(ext);
+        if let Some(id) = lookup(&candidate) {
             return Some(id);
         }
     }

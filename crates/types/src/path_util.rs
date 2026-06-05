@@ -12,6 +12,14 @@
 
 use std::path::{Component, Path};
 
+/// Returns `true` if `path` is a Python source (`.py`) or type stub (`.pyi`)
+/// file. The single source of truth shared by the extractor and the resolver.
+pub fn is_python_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext == "py" || ext == "pyi")
+}
+
 /// Returns `true` if `path` is anchored under either platform's path
 /// conventions.
 ///
