@@ -413,6 +413,15 @@ const DEFAULT_INDEX_PATTERNS: &[&str] = &[
 ///
 /// When `ws_filter` is `Some`, only files whose path starts with the given
 /// workspace root are considered (used for workspace-scoped discovery).
+/// Whether `path` is a conventional Python reachability root: `__main__.py`
+/// (run via `python -m pkg` or directly) or `__init__.py` (the package's
+/// public surface, imported as `import pkg`).
+fn is_python_entry_filename(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name == "__main__.py" || name == "__init__.py")
+}
+
 fn apply_default_fallback(
     files: &[DiscoveredFile],
     root: &Path,
@@ -535,6 +544,18 @@ fn discover_entry_points_with_warnings_impl(
             &exports_dirs,
             &mut discovery.skipped_entries,
         );
+    }
+
+    // Python has no package.json; `__main__.py` (python -m / direct run) and
+    // `__init__.py` (package public surface) are the conventional reachability
+    // roots, so a real Python project is not reported wholly unused.
+    for file in files {
+        if is_python_entry_filename(&file.path) {
+            discovery.entries.push(EntryPoint {
+                path: file.path.clone(),
+                source: EntryPointSource::PythonEntry,
+            });
+        }
     }
 
     if discovery.entries.is_empty() {

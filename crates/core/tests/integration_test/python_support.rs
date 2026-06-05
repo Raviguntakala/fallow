@@ -10,6 +10,19 @@ fn file_names(paths: &[std::path::PathBuf]) -> Vec<String> {
         .collect()
 }
 
+fn unused_file_names(results: &fallow_core::results::AnalysisResults) -> Vec<String> {
+    results
+        .unused_files
+        .iter()
+        .filter_map(|f| {
+            f.file
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
+        .collect()
+}
+
 #[test]
 fn python_mutual_imports_detected_as_cycle() {
     let root = fixture_path("python/basic");
@@ -54,5 +67,56 @@ fn python_exports_flow_into_dead_code_detection() {
     assert!(
         unused.contains(&"unused_helper"),
         "unused_helper should be flagged as an unused export, got: {unused:?}"
+    );
+}
+
+#[test]
+fn python_main_module_is_entry_point() {
+    let root = fixture_path("python/entrypoints");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused = unused_file_names(&results);
+    assert!(
+        !unused.contains(&"runner.py".to_string()),
+        "runner.py is reachable from __main__.py and must not be unused, got: {unused:?}"
+    );
+    assert!(
+        unused.contains(&"orphan_script.py".to_string()),
+        "orphan_script.py is unreachable and should be unused, got: {unused:?}"
+    );
+}
+
+#[test]
+fn python_package_init_is_entry_point() {
+    let root = fixture_path("python/package_lib");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused = unused_file_names(&results);
+    assert!(
+        !unused.contains(&"api.py".to_string()),
+        "api.py is reachable from __init__.py and must not be unused, got: {unused:?}"
+    );
+    assert!(
+        unused.contains(&"orphan.py".to_string()),
+        "mypkg/orphan.py is unreachable and should be unused, got: {unused:?}"
+    );
+}
+
+#[test]
+fn python_venv_directory_is_excluded() {
+    let root = fixture_path("python/venv_excluded");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let touched: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.file.path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    assert!(
+        !touched.iter().any(|p| p.contains("installed_pkg")),
+        "files under venv/ must be excluded from discovery, got: {touched:?}"
     );
 }

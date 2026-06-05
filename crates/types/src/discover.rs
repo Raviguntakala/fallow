@@ -75,6 +75,7 @@ impl std::fmt::Display for EntryPointSource {
             Self::ManualEntry => f.write_str("manual entry"),
             Self::InfrastructureConfig => f.write_str("infrastructure config"),
             Self::DynamicallyLoaded => f.write_str("dynamically loaded"),
+            Self::PythonEntry => f.write_str("python entry"),
         }
     }
 }
@@ -107,6 +108,8 @@ pub enum EntryPointSource {
     InfrastructureConfig,
     /// Declared in `dynamicallyLoaded` config as a runtime-loaded file.
     DynamicallyLoaded,
+    /// A Python runnable / package-surface entry (`__main__.py`, `__init__.py`).
+    PythonEntry,
 }
 
 #[cfg(test)]
