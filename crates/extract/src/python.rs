@@ -26,7 +26,7 @@
 use std::path::Path;
 
 use oxc_span::Span;
-use ruff_python_ast::{Expr, Stmt, StmtImport, StmtImportFrom};
+use ruff_python_ast::{ExceptHandler, Expr, Stmt, StmtImport, StmtImportFrom};
 use ruff_text_size::TextRange;
 use rustc_hash::FxHashMap;
 
@@ -66,13 +66,14 @@ fn import_info(
     source: String,
     imported_name: ImportedName,
     local_name: String,
+    type_only: bool,
     span: Span,
 ) -> ImportInfo {
     ImportInfo {
         source,
         imported_name,
         local_name,
-        is_type_only: false,
+        is_type_only: type_only,
         from_style: false,
         span,
         source_span: span,
@@ -80,7 +81,7 @@ fn import_info(
 }
 
 /// Map an `import a, b.c as d` statement onto namespace imports.
-fn imports_from_import(stmt: &StmtImport, out: &mut Vec<ImportInfo>) {
+fn imports_from_import(stmt: &StmtImport, type_only: bool, out: &mut Vec<ImportInfo>) {
     for alias in &stmt.names {
         let dotted = alias.name.as_str().to_string();
         let local = match &alias.asname {
@@ -96,13 +97,14 @@ fn imports_from_import(stmt: &StmtImport, out: &mut Vec<ImportInfo>) {
             dotted,
             ImportedName::Namespace,
             local,
+            type_only,
             span_of(alias.range),
         ));
     }
 }
 
 /// Map a `from <module> import <names>` statement, preserving relative dots.
-fn imports_from_import_from(stmt: &StmtImportFrom, out: &mut Vec<ImportInfo>) {
+fn imports_from_import_from(stmt: &StmtImportFrom, type_only: bool, out: &mut Vec<ImportInfo>) {
     let dots = ".".repeat(usize::try_from(stmt.level).unwrap_or(0));
     let module = stmt.module.as_ref().map_or("", |m| m.as_str());
     let source = format!("{dots}{module}");
@@ -114,6 +116,7 @@ fn imports_from_import_from(stmt: &StmtImportFrom, out: &mut Vec<ImportInfo>) {
                 source.clone(),
                 ImportedName::Namespace,
                 "*".to_string(),
+                type_only,
                 span,
             ));
         } else {
@@ -126,6 +129,7 @@ fn imports_from_import_from(stmt: &StmtImportFrom, out: &mut Vec<ImportInfo>) {
                 source.clone(),
                 ImportedName::Named(name.to_string()),
                 local,
+                type_only,
                 span,
             ));
         }
@@ -210,25 +214,90 @@ fn is_relative_with_module(stmt: &StmtImportFrom) -> bool {
     stmt.level > 0 && stmt.module.is_some()
 }
 
-/// Extract top-level imports from the module body.
+/// Whether an `if` test is a typing guard (`TYPE_CHECKING` / `t.TYPE_CHECKING`).
+fn is_type_checking_test(test: &Expr) -> bool {
+    match test {
+        Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
+        Expr::Attribute(attr) => attr.attr.as_str() == "TYPE_CHECKING",
+        _ => false,
+    }
+}
+
+/// Extract imports from the module body.
 ///
-/// In an `__init__.py`, `from .module import name` is modelled as a re-export
-/// (see [`extract_re_exports`]) and skipped here to avoid a duplicate edge.
+/// Recurses into module-load-time compound blocks (`if`/`try`/`with`/`for`/
+/// `while`) so conditional and `try/except ImportError` imports are captured.
+/// Function and class bodies are deliberately NOT descended: those imports are
+/// deferred/lazy and are commonly used to break import cycles, so capturing
+/// them would reintroduce the very cycle the author avoided (a false positive).
+///
+/// Imports inside an `if TYPE_CHECKING:` block are marked type-only so they are
+/// excluded from circular-dependency detection (the standard pattern for
+/// breaking runtime cycles while keeping type annotations).
+///
+/// In an `__init__.py`, a top-level `from .module import name` is modelled as a
+/// re-export (see [`extract_re_exports`]) and skipped here to avoid a duplicate
+/// edge.
 fn extract_imports(body: &[Stmt], is_init: bool) -> Vec<ImportInfo> {
     let mut imports = Vec::new();
-    for stmt in body {
+    collect_imports(body, is_init, false, true, &mut imports);
+    imports
+}
+
+/// Recursive worker for [`extract_imports`]. `type_only` carries an enclosing
+/// `TYPE_CHECKING` context; `top_level` gates the `__init__.py` re-export skip
+/// to module top level (nested re-exports are not modelled, so they stay
+/// ordinary imports rather than being dropped).
+fn collect_imports(
+    stmts: &[Stmt],
+    is_init: bool,
+    type_only: bool,
+    top_level: bool,
+    out: &mut Vec<ImportInfo>,
+) {
+    for stmt in stmts {
         match stmt {
-            Stmt::Import(import) => imports_from_import(import, &mut imports),
+            Stmt::Import(import) => imports_from_import(import, type_only, out),
             Stmt::ImportFrom(import_from) => {
-                if is_init && is_relative_with_module(import_from) {
+                if is_init && top_level && is_relative_with_module(import_from) {
                     continue;
                 }
-                imports_from_import_from(import_from, &mut imports);
+                imports_from_import_from(import_from, type_only, out);
+            }
+            Stmt::If(if_stmt) => {
+                let body_type_only = type_only || is_type_checking_test(&if_stmt.test);
+                collect_imports(&if_stmt.body, is_init, body_type_only, false, out);
+                for clause in &if_stmt.elif_else_clauses {
+                    // An `else:` of a TYPE_CHECKING block is runtime; only a
+                    // clause whose own test is a typing guard is type-only.
+                    let clause_type_only =
+                        type_only || clause.test.as_ref().is_some_and(is_type_checking_test);
+                    collect_imports(&clause.body, is_init, clause_type_only, false, out);
+                }
+            }
+            Stmt::Try(try_stmt) => {
+                collect_imports(&try_stmt.body, is_init, type_only, false, out);
+                for handler in &try_stmt.handlers {
+                    let ExceptHandler::ExceptHandler(h) = handler;
+                    collect_imports(&h.body, is_init, type_only, false, out);
+                }
+                collect_imports(&try_stmt.orelse, is_init, type_only, false, out);
+                collect_imports(&try_stmt.finalbody, is_init, type_only, false, out);
+            }
+            Stmt::With(with_stmt) => {
+                collect_imports(&with_stmt.body, is_init, type_only, false, out);
+            }
+            Stmt::For(for_stmt) => {
+                collect_imports(&for_stmt.body, is_init, type_only, false, out);
+                collect_imports(&for_stmt.orelse, is_init, type_only, false, out);
+            }
+            Stmt::While(while_stmt) => {
+                collect_imports(&while_stmt.body, is_init, type_only, false, out);
+                collect_imports(&while_stmt.orelse, is_init, type_only, false, out);
             }
             _ => {}
         }
     }
-    imports
 }
 
 /// Extract package re-exports from an `__init__.py`: each `from .module import
@@ -540,5 +609,81 @@ mod tests {
         assert!(info.re_exports.is_empty());
         assert_eq!(info.imports.len(), 1);
         assert_eq!(info.imports[0].source, ".api");
+    }
+
+    #[test]
+    fn type_checking_block_import_is_type_only() {
+        let info = parse(
+            "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from models import User\n",
+        );
+        let user = info
+            .imports
+            .iter()
+            .find(|i| i.source == "models")
+            .expect("models import captured");
+        assert!(
+            user.is_type_only,
+            "imports under `if TYPE_CHECKING:` must be type-only"
+        );
+    }
+
+    #[test]
+    fn typing_dotted_type_checking_is_type_only() {
+        let info =
+            parse("import typing\n\nif typing.TYPE_CHECKING:\n    from models import User\n");
+        let user = info.imports.iter().find(|i| i.source == "models");
+        assert!(user.is_some_and(|i| i.is_type_only));
+    }
+
+    #[test]
+    fn else_of_type_checking_block_is_runtime() {
+        let info = parse("if TYPE_CHECKING:\n    from a import X\nelse:\n    from b import Y\n");
+        let x = info
+            .imports
+            .iter()
+            .find(|i| i.source == "a")
+            .expect("a captured");
+        let y = info
+            .imports
+            .iter()
+            .find(|i| i.source == "b")
+            .expect("b captured");
+        assert!(x.is_type_only, "TYPE_CHECKING branch is type-only");
+        assert!(!y.is_type_only, "else branch is runtime");
+    }
+
+    #[test]
+    fn try_except_import_fallbacks_are_captured() {
+        let info = parse(
+            "try:\n    import fast_json as json\nexcept ImportError:\n    import slow_json as json\n",
+        );
+        let sources: Vec<&str> = info.imports.iter().map(|i| i.source.as_str()).collect();
+        assert!(sources.contains(&"fast_json"));
+        assert!(sources.contains(&"slow_json"));
+        assert!(info.imports.iter().all(|i| !i.is_type_only));
+    }
+
+    #[test]
+    fn conditional_top_level_import_is_runtime_not_type_only() {
+        let info = parse("import sys\n\nif sys.version_info >= (3, 11):\n    import tomllib\n");
+        let toml = info.imports.iter().find(|i| i.source == "tomllib");
+        assert!(toml.is_some_and(|i| !i.is_type_only));
+    }
+
+    #[test]
+    fn function_local_import_is_not_captured() {
+        // Deferred imports (often used to break cycles) are intentionally skipped.
+        let info = parse("def handler():\n    import heavy_module\n    return heavy_module\n");
+        assert!(
+            !info.imports.iter().any(|i| i.source == "heavy_module"),
+            "function-local imports must not be captured, got: {:?}",
+            info.imports
+        );
+    }
+
+    #[test]
+    fn class_body_import_is_not_captured() {
+        let info = parse("class C:\n    import inside_class\n");
+        assert!(!info.imports.iter().any(|i| i.source == "inside_class"));
     }
 }

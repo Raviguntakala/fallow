@@ -117,6 +117,31 @@ fn python_package_init_is_entry_point() {
 }
 
 #[test]
+fn python_type_checking_imports_do_not_create_false_cycle() {
+    // alpha.py imports beta only under `if TYPE_CHECKING:` (type-only), while
+    // beta.py imports alpha at runtime. The type-only edge must be excluded
+    // from cycle detection, so no alpha<->beta cycle is reported.
+    let root = fixture_path("python/type_checking_cycle");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let has_cycle = results.circular_dependencies.iter().any(|finding| {
+        let names = file_names(&finding.cycle.files);
+        names.contains(&"alpha.py".to_string()) && names.contains(&"beta.py".to_string())
+    });
+    assert!(
+        !has_cycle,
+        "TYPE_CHECKING-only import must not create a cycle, got: {:?}",
+        results.circular_dependencies
+    );
+    assert!(
+        results.unresolved_imports.is_empty(),
+        "sibling imports should resolve, got: {:?}",
+        results.unresolved_imports
+    );
+}
+
+#[test]
 fn python_venv_directory_is_excluded() {
     let root = fixture_path("python/venv_excluded");
     let config = create_config(root);
