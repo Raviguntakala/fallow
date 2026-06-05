@@ -28,10 +28,10 @@
 use std::path::{Path, PathBuf};
 
 use fallow_types::discover::FileId;
-use fallow_types::extract::{ImportInfo, ImportedName};
+use fallow_types::extract::{ImportInfo, ImportedName, ReExportInfo};
 
-use super::ResolvedImport;
 use super::types::ResolveResult;
+use super::{ResolvedImport, ResolvedReExport};
 
 /// Whether `path` is a Python source or stub file (resolution dispatch).
 pub(super) fn is_python_path(path: &Path) -> bool {
@@ -53,6 +53,59 @@ pub(super) fn resolve_python_imports<F: Fn(&Path) -> Option<FileId>>(
             target: resolve_python_import(file_path, imp, &lookup),
         })
         .collect()
+}
+
+/// Resolve every Python `__init__.py` re-export source against the project
+/// file index (e.g. `from .api import X` -> the `api.py` module file).
+pub(super) fn resolve_python_re_exports<F: Fn(&Path) -> Option<FileId>>(
+    file_path: &Path,
+    re_exports: &[ReExportInfo],
+    lookup: F,
+) -> Vec<ResolvedReExport> {
+    re_exports
+        .iter()
+        .map(|re| ResolvedReExport {
+            info: re.clone(),
+            target: resolve_python_specifier(file_path, &re.source, &lookup),
+        })
+        .collect()
+}
+
+/// Resolve a bare module specifier (no imported-name submodule fallback), used
+/// for re-export sources which always carry a named relative module.
+fn resolve_python_specifier<F: Fn(&Path) -> Option<FileId>>(
+    importing_file: &Path,
+    source: &str,
+    lookup: &F,
+) -> ResolveResult {
+    let dir = importing_file.parent().unwrap_or_else(|| Path::new(""));
+    let leading_dots = source.chars().take_while(|c| *c == '.').count();
+    if leading_dots > 0 {
+        let module = &source[leading_dots..];
+        climb_base(dir, leading_dots)
+            .and_then(|base| {
+                if module.is_empty() {
+                    resolve_package_init(&base, lookup)
+                } else {
+                    resolve_module_file(&base, module, lookup)
+                }
+            })
+            .map_or_else(
+                || ResolveResult::Unresolvable(source.to_string()),
+                ResolveResult::InternalModule,
+            )
+    } else {
+        resolve_absolute(dir, source, lookup)
+    }
+}
+
+/// Climb `level - 1` parent directories from `dir` (level 1 = current package).
+fn climb_base(dir: &Path, level: usize) -> Option<PathBuf> {
+    let mut base = dir.to_path_buf();
+    for _ in 0..level.saturating_sub(1) {
+        base = base.parent()?.to_path_buf();
+    }
+    Some(base)
 }
 
 /// Resolve a single Python import to a [`ResolveResult`].
@@ -83,10 +136,7 @@ fn resolve_relative<F: Fn(&Path) -> Option<FileId>>(
     lookup: &F,
 ) -> Option<ResolveResult> {
     // Level 1 is the current package directory; each extra dot climbs a parent.
-    let mut base = importing_dir.to_path_buf();
-    for _ in 0..level.saturating_sub(1) {
-        base = base.parent()?.to_path_buf();
-    }
+    let base = climb_base(importing_dir, level)?;
 
     if module.is_empty() {
         // `from . import NAME` — NAME is most often a submodule file; fall back
@@ -319,6 +369,56 @@ mod tests {
             &lookup_in(&index),
         );
         assert!(matches!(result, ResolveResult::Unresolvable(_)));
+    }
+
+    fn re_export(source: &str, name: &str) -> ReExportInfo {
+        ReExportInfo {
+            source: source.to_string(),
+            imported_name: name.to_string(),
+            exported_name: name.to_string(),
+            is_type_only: false,
+            span: Span::default(),
+        }
+    }
+
+    #[test]
+    fn re_export_relative_module_resolves_to_file() {
+        let index = file_index(&[("pkg/__init__.py", 0), ("pkg/api.py", 1)]);
+        let resolved = resolve_python_re_exports(
+            Path::new("pkg/__init__.py"),
+            &[re_export(".api", "public_fn")],
+            lookup_in(&index),
+        );
+        assert_eq!(resolved.len(), 1);
+        assert!(matches!(
+            resolved[0].target,
+            ResolveResult::InternalModule(FileId(1))
+        ));
+    }
+
+    #[test]
+    fn re_export_parent_relative_resolves() {
+        let index = file_index(&[("a/sub/__init__.py", 0), ("a/shared.py", 1)]);
+        let resolved = resolve_python_re_exports(
+            Path::new("a/sub/__init__.py"),
+            &[re_export("..shared", "Thing")],
+            lookup_in(&index),
+        );
+        assert!(matches!(
+            resolved[0].target,
+            ResolveResult::InternalModule(FileId(1))
+        ));
+    }
+
+    #[test]
+    fn re_export_unresolved_relative_is_unresolvable() {
+        let index = file_index(&[("pkg/__init__.py", 0)]);
+        let resolved = resolve_python_re_exports(
+            Path::new("pkg/__init__.py"),
+            &[re_export(".missing", "X")],
+            lookup_in(&index),
+        );
+        assert!(matches!(resolved[0].target, ResolveResult::Unresolvable(_)));
     }
 
     #[test]

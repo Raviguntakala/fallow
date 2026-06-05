@@ -30,7 +30,9 @@ use ruff_python_ast::{Expr, Stmt, StmtImport, StmtImportFrom};
 use ruff_text_size::TextRange;
 use rustc_hash::FxHashMap;
 
-use crate::{ExportInfo, ExportName, ImportInfo, ImportedName, ModuleInfo, VisibilityTag};
+use crate::{
+    ExportInfo, ExportName, ImportInfo, ImportedName, ModuleInfo, ReExportInfo, VisibilityTag,
+};
 use fallow_types::discover::FileId;
 
 /// Whether `path` is a Python source or stub file.
@@ -193,17 +195,74 @@ fn extract_exports(body: &[Stmt]) -> Vec<ExportInfo> {
     }
 }
 
+/// Whether `path` is a package `__init__.py` / `__init__.pyi`.
+fn is_init_module(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name == "__init__.py" || name == "__init__.pyi")
+}
+
+/// Whether a `from ... import ...` is relative with a named module (`from .api
+/// import X`) — the form an `__init__.py` re-exports as package API. The bare
+/// `from . import submodule` form (no module) stays an ordinary import because
+/// resolving it needs the imported name as the submodule.
+fn is_relative_with_module(stmt: &StmtImportFrom) -> bool {
+    stmt.level > 0 && stmt.module.is_some()
+}
+
 /// Extract top-level imports from the module body.
-fn extract_imports(body: &[Stmt]) -> Vec<ImportInfo> {
+///
+/// In an `__init__.py`, `from .module import name` is modelled as a re-export
+/// (see [`extract_re_exports`]) and skipped here to avoid a duplicate edge.
+fn extract_imports(body: &[Stmt], is_init: bool) -> Vec<ImportInfo> {
     let mut imports = Vec::new();
     for stmt in body {
         match stmt {
             Stmt::Import(import) => imports_from_import(import, &mut imports),
-            Stmt::ImportFrom(import_from) => imports_from_import_from(import_from, &mut imports),
+            Stmt::ImportFrom(import_from) => {
+                if is_init && is_relative_with_module(import_from) {
+                    continue;
+                }
+                imports_from_import_from(import_from, &mut imports);
+            }
             _ => {}
         }
     }
     imports
+}
+
+/// Extract package re-exports from an `__init__.py`: each `from .module import
+/// name` re-exposes `name` as part of the package's public API, so it is
+/// modelled as a [`ReExportInfo`] feeding the re-export chain resolver.
+fn extract_re_exports(body: &[Stmt], is_init: bool) -> Vec<ReExportInfo> {
+    if !is_init {
+        return Vec::new();
+    }
+    let mut re_exports = Vec::new();
+    for stmt in body {
+        let Stmt::ImportFrom(import_from) = stmt else {
+            continue;
+        };
+        if !is_relative_with_module(import_from) {
+            continue;
+        }
+        let dots = ".".repeat(usize::try_from(import_from.level).unwrap_or(0));
+        let module = import_from.module.as_ref().map_or("", |m| m.as_str());
+        let source = format!("{dots}{module}");
+        let span = span_of(import_from.range);
+        for alias in &import_from.names {
+            let name = alias.name.as_str();
+            let exported = alias.asname.as_ref().map_or(name, |a| a.as_str());
+            re_exports.push(ReExportInfo {
+                source: source.clone(),
+                imported_name: name.to_string(),
+                exported_name: exported.to_string(),
+                is_type_only: false,
+                span,
+            });
+        }
+    }
+    re_exports
 }
 
 /// Parse Python `source` into a [`ModuleInfo`].
@@ -213,24 +272,29 @@ fn extract_imports(body: &[Stmt]) -> Vec<ImportInfo> {
 /// best-effort posture of the other language front-ends.
 pub fn parse_python_to_module(
     file_id: FileId,
-    _path: &Path,
+    path: &Path,
     source: &str,
     content_hash: u64,
 ) -> ModuleInfo {
+    let is_init = is_init_module(path);
     let parsed_suppressions = crate::suppress::parse_suppressions_from_source(source);
-    let (imports, exports) = match ruff_python_parser::parse_module(source) {
+    let (imports, exports, re_exports) = match ruff_python_parser::parse_module(source) {
         Ok(parsed) => {
             let body = &parsed.syntax().body;
-            (extract_imports(body), extract_exports(body))
+            (
+                extract_imports(body, is_init),
+                extract_exports(body),
+                extract_re_exports(body, is_init),
+            )
         }
-        Err(_) => (Vec::new(), Vec::new()),
+        Err(_) => (Vec::new(), Vec::new(), Vec::new()),
     };
 
     ModuleInfo {
         file_id,
         exports,
         imports,
-        re_exports: Vec::new(),
+        re_exports,
         dynamic_imports: Vec::new(),
         dynamic_import_patterns: Vec::new(),
         require_calls: Vec::new(),
@@ -268,6 +332,10 @@ mod tests {
 
     fn parse(src: &str) -> ModuleInfo {
         parse_python_to_module(FileId(0), Path::new("m.py"), src, 0)
+    }
+
+    fn parse_at(path: &str, src: &str) -> ModuleInfo {
+        parse_python_to_module(FileId(0), Path::new(path), src, 0)
     }
 
     fn export_names(info: &ModuleInfo) -> Vec<String> {
@@ -421,5 +489,56 @@ mod tests {
         let info = parse("import os\n");
         let span = info.imports[0].span;
         assert!(span.end > span.start);
+    }
+
+    #[test]
+    fn init_relative_from_import_becomes_re_export() {
+        let info = parse_at("pkg/__init__.py", "from .api import public_fn\n");
+        assert_eq!(info.re_exports.len(), 1);
+        assert_eq!(info.re_exports[0].source, ".api");
+        assert_eq!(info.re_exports[0].imported_name, "public_fn");
+        assert_eq!(info.re_exports[0].exported_name, "public_fn");
+        // Not double-counted as an import.
+        assert!(info.imports.is_empty());
+    }
+
+    #[test]
+    fn init_relative_from_import_alias_re_export_uses_alias_name() {
+        let info = parse_at("pkg/__init__.py", "from .api import public_fn as pf\n");
+        assert_eq!(info.re_exports[0].imported_name, "public_fn");
+        assert_eq!(info.re_exports[0].exported_name, "pf");
+    }
+
+    #[test]
+    fn init_star_re_export() {
+        let info = parse_at("pkg/__init__.py", "from .api import *\n");
+        assert_eq!(info.re_exports.len(), 1);
+        assert_eq!(info.re_exports[0].imported_name, "*");
+        assert_eq!(info.re_exports[0].exported_name, "*");
+    }
+
+    #[test]
+    fn init_from_dot_import_submodule_stays_import() {
+        // `from . import views` (no module) needs the imported name as the
+        // submodule to resolve, so it remains an ordinary import.
+        let info = parse_at("pkg/__init__.py", "from . import views\n");
+        assert!(info.re_exports.is_empty());
+        assert_eq!(info.imports.len(), 1);
+        assert_eq!(info.imports[0].source, ".");
+    }
+
+    #[test]
+    fn init_absolute_from_import_stays_import() {
+        let info = parse_at("pkg/__init__.py", "from os import path\n");
+        assert!(info.re_exports.is_empty());
+        assert_eq!(info.imports.len(), 1);
+    }
+
+    #[test]
+    fn non_init_relative_from_import_stays_import() {
+        let info = parse_at("pkg/module.py", "from .api import public_fn\n");
+        assert!(info.re_exports.is_empty());
+        assert_eq!(info.imports.len(), 1);
+        assert_eq!(info.imports[0].source, ".api");
     }
 }

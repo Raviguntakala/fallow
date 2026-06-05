@@ -49,7 +49,7 @@ use fallow_types::extract::{ImportInfo, ImportedName, ModuleInfo};
 use oxc_span::Span;
 
 use dynamic_imports::{resolve_dynamic_imports, resolve_dynamic_patterns};
-use python::{is_python_path, resolve_python_imports};
+use python::{is_python_path, resolve_python_imports, resolve_python_re_exports};
 use re_exports::resolve_re_exports;
 use react_native::{build_condition_names, build_extensions};
 use require_imports::resolve_require_imports;
@@ -177,14 +177,20 @@ pub fn resolve_all_imports(
                 return None;
             };
 
-            let mut all_imports = if is_python_path(file_path) {
-                // Python imports bypass oxc_resolver; resolve against the
-                // discovered project file index by path.
-                resolve_python_imports(file_path, &module.imports, |p: &Path| {
-                    raw_path_to_id.get(p).or_else(|| path_to_id.get(p)).copied()
-                })
+            // Python bypasses oxc_resolver, resolving imports and re-exports
+            // against the discovered project file index by path.
+            let (mut all_imports, resolved_re_exports) = if is_python_path(file_path) {
+                let lookup =
+                    |p: &Path| raw_path_to_id.get(p).or_else(|| path_to_id.get(p)).copied();
+                (
+                    resolve_python_imports(file_path, &module.imports, lookup),
+                    resolve_python_re_exports(file_path, &module.re_exports, lookup),
+                )
             } else {
-                resolve_static_imports(&ctx, file_path, &module.imports)
+                (
+                    resolve_static_imports(&ctx, file_path, &module.imports),
+                    resolve_re_exports(&ctx, file_path, &module.re_exports),
+                )
             };
             all_imports.extend(resolve_require_imports(
                 &ctx,
@@ -192,20 +198,13 @@ pub fn resolve_all_imports(
                 &module.require_calls,
             ));
 
-            let from_dir = if canonical_paths.is_empty() {
-                file_path.parent().unwrap_or(file_path)
-            } else {
-                canonical_paths
-                    .get(module.file_id.0 as usize)
-                    .and_then(|p| p.parent())
-                    .unwrap_or(file_path)
-            };
+            let from_dir = module_parent_dir(file_path, &canonical_paths, module.file_id);
 
             Some(ResolvedModule {
                 file_id: module.file_id,
                 path: file_path.to_path_buf(),
                 exports: module.exports.clone(),
-                re_exports: resolve_re_exports(&ctx, file_path, &module.re_exports),
+                re_exports: resolved_re_exports,
                 resolved_imports: all_imports,
                 resolved_dynamic_imports: resolve_dynamic_imports(
                     &ctx,
@@ -241,6 +240,23 @@ pub fn resolve_all_imports(
     );
 
     resolved
+}
+
+/// The directory a module resolves dynamic-import globs from: its canonical
+/// parent when canonicalization is in play, otherwise its raw parent.
+fn module_parent_dir<'a>(
+    file_path: &'a Path,
+    canonical_paths: &'a [PathBuf],
+    file_id: FileId,
+) -> &'a Path {
+    if canonical_paths.is_empty() {
+        file_path.parent().unwrap_or(file_path)
+    } else {
+        canonical_paths
+            .get(file_id.0 as usize)
+            .and_then(|p| p.parent())
+            .unwrap_or(file_path)
+    }
 }
 
 /// Synthesize module-graph edges for convention auto-imports.

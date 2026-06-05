@@ -102,6 +102,18 @@ fn python_package_init_is_entry_point() {
         unused.contains(&"orphan.py".to_string()),
         "mypkg/orphan.py is unreachable and should be unused, got: {unused:?}"
     );
+
+    // `public_fn` is re-exported by the package __init__ barrel (an entry),
+    // so it must be credited rather than reported as an unused export.
+    let unused_exports: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export.export_name.as_str())
+        .collect();
+    assert!(
+        !unused_exports.contains(&"public_fn"),
+        "public_fn is re-exported by the __init__ barrel and should be credited, got: {unused_exports:?}"
+    );
 }
 
 #[test]
