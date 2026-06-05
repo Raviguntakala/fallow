@@ -99,7 +99,7 @@ impl<'s> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder<'s> {
 
 pub const SOURCE_EXTENSIONS: &[&str] = &[
     "ts", "tsx", "mts", "cts", "gts", "js", "jsx", "mjs", "cjs", "gjs", "vue", "svelte", "astro",
-    "mdx", "css", "scss", "html", "graphql", "gql",
+    "mdx", "css", "scss", "html", "graphql", "gql", "py", "pyi",
 ];
 
 /// Glob patterns for test/dev/story files excluded in production mode.

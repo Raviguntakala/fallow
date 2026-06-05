@@ -154,7 +154,7 @@ fn extract_exports(body: &[Stmt]) -> Vec<ExportInfo> {
     for stmt in body {
         match stmt {
             Stmt::FunctionDef(f) => {
-                candidates.push((f.name.as_str().to_string(), span_of(f.range)))
+                candidates.push((f.name.as_str().to_string(), span_of(f.range)));
             }
             Stmt::ClassDef(c) => candidates.push((c.name.as_str().to_string(), span_of(c.range))),
             Stmt::Assign(assign) => {

@@ -326,6 +326,8 @@ mod tests {
     fn source_extensions_re_exported() {
         assert!(SOURCE_EXTENSIONS.contains(&"ts"));
         assert!(SOURCE_EXTENSIONS.contains(&"tsx"));
+        assert!(SOURCE_EXTENSIONS.contains(&"py"));
+        assert!(SOURCE_EXTENSIONS.contains(&"pyi"));
     }
 
     #[test]

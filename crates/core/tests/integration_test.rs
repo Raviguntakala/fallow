@@ -102,6 +102,8 @@ mod css_modules_unused;
 mod private_type_leaks;
 #[path = "integration_test/production_mode.rs"]
 mod production_mode;
+#[path = "integration_test/python_support.rs"]
+mod python_support;
 #[path = "integration_test/re_export_chains.rs"]
 mod re_export_chains;
 #[path = "integration_test/security_catalogue_categories.rs"]

@@ -18,6 +18,7 @@
 mod dynamic_imports;
 pub(crate) mod fallbacks;
 mod path_info;
+mod python;
 mod re_exports;
 mod react_native;
 mod require_imports;
@@ -48,6 +49,7 @@ use fallow_types::extract::{ImportInfo, ImportedName, ModuleInfo};
 use oxc_span::Span;
 
 use dynamic_imports::{resolve_dynamic_imports, resolve_dynamic_patterns};
+use python::{is_python_path, resolve_python_imports};
 use re_exports::resolve_re_exports;
 use react_native::{build_condition_names, build_extensions};
 use require_imports::resolve_require_imports;
@@ -175,7 +177,15 @@ pub fn resolve_all_imports(
                 return None;
             };
 
-            let mut all_imports = resolve_static_imports(&ctx, file_path, &module.imports);
+            let mut all_imports = if is_python_path(file_path) {
+                // Python imports bypass oxc_resolver; resolve against the
+                // discovered project file index by path.
+                resolve_python_imports(file_path, &module.imports, |p: &Path| {
+                    raw_path_to_id.get(p).or_else(|| path_to_id.get(p)).copied()
+                })
+            } else {
+                resolve_static_imports(&ctx, file_path, &module.imports)
+            };
             all_imports.extend(resolve_require_imports(
                 &ctx,
                 file_path,

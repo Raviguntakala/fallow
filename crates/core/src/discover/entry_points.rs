@@ -1055,7 +1055,7 @@ mod tests {
         /// Non-source extensions should NOT be in the SOURCE_EXTENSIONS list.
         #[test]
         fn non_source_extensions_not_in_list(
-            ext in prop::sample::select(vec!["py", "rb", "rs", "go", "java", "xml", "yaml", "toml", "md", "txt", "png", "jpg", "wasm", "lock"]),
+            ext in prop::sample::select(vec!["rb", "rs", "go", "java", "xml", "yaml", "toml", "md", "txt", "png", "jpg", "wasm", "lock"]),
         ) {
             prop_assert!(
                 !SOURCE_EXTENSIONS.contains(&ext),
