@@ -142,6 +142,26 @@ fn python_type_checking_imports_do_not_create_false_cycle() {
 }
 
 #[test]
+fn python_stub_only_module_resolves_and_is_reachable() {
+    // shapes.pyi has no .py implementation; importing it from the __main__
+    // entry must resolve to the stub (not report unresolved / unused).
+    let root = fixture_path("python/stub_package");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    assert!(
+        results.unresolved_imports.is_empty(),
+        "stub import should resolve, got: {:?}",
+        results.unresolved_imports
+    );
+    let unused = unused_file_names(&results);
+    assert!(
+        !unused.contains(&"shapes.pyi".to_string()),
+        "shapes.pyi is imported from the entry and must not be unused, got: {unused:?}"
+    );
+}
+
+#[test]
 fn python_venv_directory_is_excluded() {
     let root = fixture_path("python/venv_excluded");
     let config = create_config(root);

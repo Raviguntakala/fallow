@@ -173,11 +173,19 @@ fn resolve_absolute<F: Fn(&Path) -> Option<FileId>>(
     ResolveResult::NpmPackage(package.to_string())
 }
 
-/// Walk up from `start_dir` while each directory is a package (`__init__.py`),
-/// returning the first ancestor that is not — the import root.
+/// Module file extensions, in resolution priority: a real implementation
+/// (`.py`) is preferred over a type stub (`.pyi`).
+const MODULE_EXTENSIONS: &[&str] = &["py", "pyi"];
+
+/// Package marker files, same `.py`-before-`.pyi` priority.
+const INIT_FILES: &[&str] = &["__init__.py", "__init__.pyi"];
+
+/// Walk up from `start_dir` while each directory is a package (has an
+/// `__init__.py` or `__init__.pyi`), returning the first ancestor that is not —
+/// the import root.
 fn import_root<F: Fn(&Path) -> Option<FileId>>(start_dir: &Path, lookup: &F) -> PathBuf {
     let mut dir = start_dir.to_path_buf();
-    while lookup(&dir.join("__init__.py")).is_some() {
+    while resolve_package_init(&dir, lookup).is_some() {
         match dir.parent() {
             Some(parent) => dir = parent.to_path_buf(),
             None => break,
@@ -186,8 +194,8 @@ fn import_root<F: Fn(&Path) -> Option<FileId>>(start_dir: &Path, lookup: &F) -> 
     dir
 }
 
-/// Resolve a dotted module path under `base` to `base/seg/.../leaf.py` or
-/// `base/seg/.../leaf/__init__.py`.
+/// Resolve a dotted module path under `base` to `base/seg/.../leaf.{py,pyi}` or
+/// `base/seg/.../leaf/__init__.{py,pyi}`.
 fn resolve_module_file<F: Fn(&Path) -> Option<FileId>>(
     base: &Path,
     dotted: &str,
@@ -195,18 +203,21 @@ fn resolve_module_file<F: Fn(&Path) -> Option<FileId>>(
 ) -> Option<FileId> {
     let module_dir = push_dotted(base, dotted);
 
-    let mut as_module = module_dir.clone();
-    as_module.set_extension("py");
-    if let Some(id) = lookup(&as_module) {
-        return Some(id);
+    for ext in MODULE_EXTENSIONS {
+        let mut as_module = module_dir.clone();
+        as_module.set_extension(ext);
+        if let Some(id) = lookup(&as_module) {
+            return Some(id);
+        }
     }
 
-    lookup(&module_dir.join("__init__.py"))
+    resolve_package_init(&module_dir, lookup)
 }
 
-/// Resolve the `__init__.py` of the package directory `base`.
+/// Resolve the package marker (`__init__.py` / `__init__.pyi`) of directory
+/// `base`.
 fn resolve_package_init<F: Fn(&Path) -> Option<FileId>>(base: &Path, lookup: &F) -> Option<FileId> {
-    lookup(&base.join("__init__.py"))
+    INIT_FILES.iter().find_map(|init| lookup(&base.join(init)))
 }
 
 /// Push each dot-separated segment of `dotted` onto `base` as a path component.
@@ -358,6 +369,70 @@ mod tests {
             ResolveResult::NpmPackage(name) => assert_eq!(name, "os"),
             other => panic!("expected NpmPackage, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn stub_only_module_resolves() {
+        // `.pyi` stub with no `.py` implementation is discovered, so imports
+        // to it must resolve rather than fall through to an external package.
+        let index = file_index(&[("app.py", 0), ("api.pyi", 1)]);
+        let result = resolve_python_import(
+            Path::new("app.py"),
+            &import("api", ImportedName::Namespace),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(1))));
+    }
+
+    #[test]
+    fn stub_only_package_init_resolves() {
+        let index = file_index(&[("app.py", 0), ("pkg/__init__.pyi", 1)]);
+        let result = resolve_python_import(
+            Path::new("app.py"),
+            &import("pkg", ImportedName::Namespace),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(1))));
+    }
+
+    #[test]
+    fn import_root_walks_through_stub_only_package() {
+        // `src/app` is a package declared only by `__init__.pyi`; `src` is the
+        // import root, so `app.config` must resolve against it.
+        let index = file_index(&[
+            ("src/app/__init__.pyi", 0),
+            ("src/app/main.py", 1),
+            ("src/app/config.py", 2),
+        ]);
+        let result = resolve_python_import(
+            Path::new("src/app/main.py"),
+            &import("app.config", ImportedName::Named("SETTINGS".to_string())),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(2))));
+    }
+
+    #[test]
+    fn relative_stub_module_resolves() {
+        let index = file_index(&[("pkg/sub/a.py", 0), ("pkg/sub/mod.pyi", 1)]);
+        let result = resolve_python_import(
+            Path::new("pkg/sub/a.py"),
+            &import(".mod", ImportedName::Named("x".to_string())),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(1))));
+    }
+
+    #[test]
+    fn implementation_preferred_over_stub() {
+        // When both `.py` and `.pyi` exist, the implementation wins.
+        let index = file_index(&[("app.py", 0), ("api.py", 1), ("api.pyi", 2)]);
+        let result = resolve_python_import(
+            Path::new("app.py"),
+            &import("api", ImportedName::Namespace),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(1))));
     }
 
     #[test]
