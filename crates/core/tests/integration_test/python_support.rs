@@ -162,6 +162,25 @@ fn python_stub_only_module_resolves_and_is_reachable() {
 }
 
 #[test]
+fn python_stub_only_package_init_is_entry_point() {
+    // A package whose only marker is __init__.pyi (no __init__.py) must still
+    // get a reachability root, so its re-exported stub surface is credited.
+    let root = fixture_path("python/stub_pkg_init");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused = unused_file_names(&results);
+    assert!(
+        !unused.contains(&"api.pyi".to_string()),
+        "api.pyi is re-exported by the __init__.pyi entry and must not be unused, got: {unused:?}"
+    );
+    assert!(
+        unused.contains(&"orphan.pyi".to_string()),
+        "orphan.pyi is unreachable and should be unused, got: {unused:?}"
+    );
+}
+
+#[test]
 fn python_venv_directory_is_excluded() {
     let root = fixture_path("python/venv_excluded");
     let config = create_config(root);

@@ -413,13 +413,16 @@ const DEFAULT_INDEX_PATTERNS: &[&str] = &[
 ///
 /// When `ws_filter` is `Some`, only files whose path starts with the given
 /// workspace root are considered (used for workspace-scoped discovery).
-/// Whether `path` is a conventional Python reachability root: `__main__.py`
-/// (run via `python -m pkg` or directly) or `__init__.py` (the package's
-/// public surface, imported as `import pkg`).
+/// Whether `path` is a conventional Python reachability root: `__main__`
+/// (run via `python -m pkg` or directly) or `__init__` (the package's public
+/// surface, imported as `import pkg`). Matches both `.py` sources and `.pyi`
+/// stubs so stub-only packages still get a reachability root.
 fn is_python_entry_filename(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|name| name == "__main__.py" || name == "__init__.py")
+    fallow_types::path_util::is_python_file(path)
+        && path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|stem| stem == "__main__" || stem == "__init__")
 }
 
 fn apply_default_fallback(

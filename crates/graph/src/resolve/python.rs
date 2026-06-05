@@ -9,21 +9,23 @@
 //! ## Semantics
 //! - **Relative imports** (`from . import x`, `from ..pkg import y`): the leading
 //!   dot count is the package level. Level 1 is the importing file's own
-//!   package directory; each extra dot climbs one parent. A bare `from . import
-//!   name` resolves `name` as a submodule first, then falls back to the
-//!   package's `__init__.py`.
+//!   package directory; each extra dot climbs one parent.
+//! - **`from X import Y`**: `Y` is preferred as the submodule `X.Y` when that
+//!   file exists (Python loads the submodule), otherwise `Y` is treated as a
+//!   name defined in / re-exported by `X` and the source `X` is resolved.
 //! - **Absolute imports** (`import a.b`, `from a.b import x`): resolved against
 //!   the importing file's *import root* — the nearest ancestor that is not
-//!   itself a package (no `__init__.py`). This matches CPython's `sys.path`-from
-//!   -package-root behaviour for classic (``__init__.py``) and flat layouts.
+//!   itself a package (no `__init__.py` / `__init__.pyi`). This matches CPython's
+//!   `sys.path`-from-package-root behaviour for classic and flat layouts.
+//! - Module files and package markers resolve `.py` before `.pyi`, so stub-only
+//!   modules and packages are reachable.
 //! - An unresolved **relative** import is [`ResolveResult::Unresolvable`] (a
 //!   relative import must be internal). An unresolved **absolute** import is
 //!   treated as an external [`ResolveResult::NpmPackage`] keyed on its first
 //!   dotted segment (stdlib vs. third-party classification is a later phase).
 //!
-//! Known limitations (deferred): PEP 420 implicit namespace packages, multiple
-//! `sys.path` roots beyond the import-root walk, and `from pkg import submodule`
-//! where `submodule` is a sibling module rather than a name in `pkg/__init__`.
+//! Known limitations (deferred): PEP 420 implicit namespace packages and
+//! multiple `sys.path` roots beyond the import-root walk.
 
 use std::path::{Path, PathBuf};
 
@@ -108,31 +110,31 @@ fn climb_base(dir: &Path, level: usize) -> Option<PathBuf> {
 
 /// Resolve a single Python import to a [`ResolveResult`].
 ///
-/// `from . import NAME` (pure leading dots, no module) is the one form whose
-/// target lives in the imported *name* rather than the source, so it is
-/// special-cased to prefer `NAME` as a submodule. Every other form — relative
-/// `from .mod`, `from ..pkg`, and absolute imports — resolves its source via
-/// [`resolve_python_specifier`].
+/// For `from X import Y`, `Y` is commonly the submodule `X.Y` (Python loads the
+/// submodule when the file exists), so that edge is preferred when it resolves
+/// to a project file. Otherwise `Y` is a name defined in `X` (or re-exported by
+/// `X`'s `__init__`) and the source `X` is resolved. Plain `import a.b` carries
+/// its full path in the source and resolves directly. This subsumes the
+/// `from . import NAME` case (source `"."`, submodule `".NAME"`).
 fn resolve_python_import<F: Fn(&Path) -> Option<FileId>>(
     importing_file: &Path,
     import: &ImportInfo,
     lookup: &F,
 ) -> ResolveResult {
     let source = import.source.as_str();
-    let leading_dots = source.chars().take_while(|c| *c == '.').count();
 
-    if leading_dots > 0
-        && source[leading_dots..].is_empty()
-        && let ImportedName::Named(name) = &import.imported_name
-    {
-        let dir = importing_file.parent().unwrap_or_else(|| Path::new(""));
-        if let Some(base) = climb_base(dir, leading_dots)
-            && let Some(id) = resolve_module_file(&base, name, lookup)
+    if let ImportedName::Named(name) = &import.imported_name {
+        // `.`/`..` already end in a separator dot; a named module needs one.
+        let submodule = if source.ends_with('.') {
+            format!("{source}{name}")
+        } else {
+            format!("{source}.{name}")
+        };
+        if let ResolveResult::InternalModule(id) =
+            resolve_python_specifier(importing_file, &submodule, lookup)
         {
             return ResolveResult::InternalModule(id);
         }
-        // Fall through: `resolve_python_specifier(".")` resolves the package
-        // `__init__`, the re-exported-name fallback.
     }
 
     resolve_python_specifier(importing_file, source, lookup)
@@ -329,6 +331,48 @@ mod tests {
             &lookup_in(&index),
         );
         assert!(matches!(result, ResolveResult::InternalModule(FileId(1))));
+    }
+
+    #[test]
+    fn from_package_import_submodule_resolves_to_submodule_file() {
+        // `from pkg import api` where pkg/api.py exists loads the submodule, so
+        // the edge must point at api.py, not pkg/__init__.py.
+        let index = file_index(&[("app.py", 0), ("pkg/__init__.py", 1), ("pkg/api.py", 2)]);
+        let result = resolve_python_import(
+            Path::new("app.py"),
+            &import("pkg", ImportedName::Named("api".to_string())),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(2))));
+    }
+
+    #[test]
+    fn from_package_import_name_falls_back_to_package_init() {
+        // `from pkg import helper` where helper is a name in __init__ (no
+        // pkg/helper.py) resolves to the package __init__.
+        let index = file_index(&[("app.py", 0), ("pkg/__init__.py", 1)]);
+        let result = resolve_python_import(
+            Path::new("app.py"),
+            &import("pkg", ImportedName::Named("helper".to_string())),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(1))));
+    }
+
+    #[test]
+    fn from_relative_package_import_submodule_resolves() {
+        // `from .pkg import sub` where app/pkg/sub.py exists.
+        let index = file_index(&[
+            ("app/main.py", 0),
+            ("app/pkg/__init__.py", 1),
+            ("app/pkg/sub.py", 2),
+        ]);
+        let result = resolve_python_import(
+            Path::new("app/main.py"),
+            &import(".pkg", ImportedName::Named("sub".to_string())),
+            &lookup_in(&index),
+        );
+        assert!(matches!(result, ResolveResult::InternalModule(FileId(2))));
     }
 
     #[test]
