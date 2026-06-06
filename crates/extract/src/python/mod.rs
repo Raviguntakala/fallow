@@ -86,18 +86,17 @@ fn import_info(
 /// Map an `import a, b.c as d` statement onto namespace imports.
 fn imports_from_import(stmt: &StmtImport, type_only: bool, out: &mut Vec<ImportInfo>) {
     for alias in &stmt.names {
-        let dotted = alias.name.as_str().to_string();
+        let dotted = alias.name.as_str();
         let local = match &alias.asname {
             Some(a) => a.as_str().to_string(),
             // `import a.b.c` binds the top-level name `a`.
             None => dotted
-                .split('.')
-                .next()
-                .unwrap_or(dotted.as_str())
+                .split_once('.')
+                .map_or(dotted, |(head, _)| head)
                 .to_string(),
         };
         out.push(import_info(
-            dotted,
+            dotted.to_string(),
             ImportedName::Namespace,
             local,
             type_only,
@@ -106,11 +105,16 @@ fn imports_from_import(stmt: &StmtImport, type_only: bool, out: &mut Vec<ImportI
     }
 }
 
+/// Reconstruct a `from` specifier, preserving leading relative dots
+/// (`from ..pkg import x` → `"..pkg"`, `from . import y` → `"."`).
+fn relative_source(level: u32, module: Option<&str>) -> String {
+    let dots = ".".repeat(usize::try_from(level).unwrap_or(0));
+    format!("{dots}{}", module.unwrap_or(""))
+}
+
 /// Map a `from <module> import <names>` statement, preserving relative dots.
 fn imports_from_import_from(stmt: &StmtImportFrom, type_only: bool, out: &mut Vec<ImportInfo>) {
-    let dots = ".".repeat(usize::try_from(stmt.level).unwrap_or(0));
-    let module = stmt.module.as_ref().map_or("", |m| m.as_str());
-    let source = format!("{dots}{module}");
+    let source = relative_source(stmt.level, stmt.module.as_ref().map(|m| m.as_str()));
     for alias in &stmt.names {
         let name = alias.name.as_str();
         let span = span_of(alias.range);
@@ -332,9 +336,10 @@ fn extract_re_exports(body: &[Stmt], is_init: bool) -> Vec<ReExportInfo> {
         if !is_relative_with_module(import_from) {
             continue;
         }
-        let dots = ".".repeat(usize::try_from(import_from.level).unwrap_or(0));
-        let module = import_from.module.as_ref().map_or("", |m| m.as_str());
-        let source = format!("{dots}{module}");
+        let source = relative_source(
+            import_from.level,
+            import_from.module.as_ref().map(|m| m.as_str()),
+        );
         let span = span_of(import_from.range);
         for alias in &import_from.names {
             let name = alias.name.as_str();

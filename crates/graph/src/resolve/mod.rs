@@ -49,7 +49,7 @@ use fallow_types::extract::{ImportInfo, ImportedName, ModuleInfo};
 use oxc_span::Span;
 
 use dynamic_imports::{resolve_dynamic_imports, resolve_dynamic_patterns};
-use python::{is_python_path, resolve_python_imports, resolve_python_re_exports};
+use python::{resolve_python_imports, resolve_python_re_exports};
 use re_exports::resolve_re_exports;
 use react_native::{build_condition_names, build_extensions};
 use require_imports::resolve_require_imports;
@@ -179,19 +179,20 @@ pub fn resolve_all_imports(
 
             // Python bypasses oxc_resolver, resolving imports and re-exports
             // against the discovered project file index by path.
-            let (mut all_imports, resolved_re_exports) = if is_python_path(file_path) {
-                let lookup =
-                    |p: &Path| raw_path_to_id.get(p).or_else(|| path_to_id.get(p)).copied();
-                (
-                    resolve_python_imports(file_path, &module.imports, lookup),
-                    resolve_python_re_exports(file_path, &module.re_exports, lookup),
-                )
-            } else {
-                (
-                    resolve_static_imports(&ctx, file_path, &module.imports),
-                    resolve_re_exports(&ctx, file_path, &module.re_exports),
-                )
-            };
+            let (mut all_imports, resolved_re_exports) =
+                if fallow_types::path_util::is_python_file(file_path) {
+                    let lookup =
+                        |p: &Path| raw_path_to_id.get(p).or_else(|| path_to_id.get(p)).copied();
+                    (
+                        resolve_python_imports(file_path, &module.imports, lookup),
+                        resolve_python_re_exports(file_path, &module.re_exports, lookup),
+                    )
+                } else {
+                    (
+                        resolve_static_imports(&ctx, file_path, &module.imports),
+                        resolve_re_exports(&ctx, file_path, &module.re_exports),
+                    )
+                };
             all_imports.extend(resolve_require_imports(
                 &ctx,
                 file_path,

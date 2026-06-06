@@ -36,11 +36,6 @@ use fallow_types::extract::{ImportInfo, ImportedName, ReExportInfo};
 use super::types::ResolveResult;
 use super::{ResolvedImport, ResolvedReExport};
 
-/// Whether `path` is a Python source or stub file (resolution dispatch).
-pub(super) fn is_python_path(path: &Path) -> bool {
-    fallow_types::path_util::is_python_file(path)
-}
-
 /// Resolve every Python import for one module against the project file index.
 pub(super) fn resolve_python_imports<F: Fn(&Path) -> Option<FileId>>(
     file_path: &Path,
