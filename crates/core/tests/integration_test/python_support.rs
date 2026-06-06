@@ -204,6 +204,31 @@ fn python_annotated_module_exports_are_detected() {
 }
 
 #[test]
+fn python_external_imports_do_not_surface_as_npm_dependencies() {
+    // A repo with a package.json alongside Python code must not report Python
+    // stdlib/pip imports (requests, typing) as missing/unlisted npm deps, nor
+    // as unresolved imports.
+    let root = fixture_path("python/mixed_repo");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unlisted: Vec<&str> = results
+        .unlisted_dependencies
+        .iter()
+        .map(|d| d.dep.package_name.as_str())
+        .collect();
+    assert!(
+        !unlisted.iter().any(|n| *n == "requests" || *n == "typing"),
+        "Python externals must not be reported as unlisted npm deps, got: {unlisted:?}"
+    );
+    assert!(
+        results.unresolved_imports.is_empty(),
+        "Python externals must not be unresolved imports, got: {:?}",
+        results.unresolved_imports
+    );
+}
+
+#[test]
 fn python_venv_directory_is_excluded() {
     let root = fixture_path("python/venv_excluded");
     let config = create_config(root);

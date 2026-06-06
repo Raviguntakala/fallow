@@ -20,9 +20,10 @@
 //! - Module files and package markers resolve `.py` before `.pyi`, so stub-only
 //!   modules and packages are reachable.
 //! - An unresolved **relative** import is [`ResolveResult::Unresolvable`] (a
-//!   relative import must be internal). An unresolved **absolute** import is
-//!   treated as an external [`ResolveResult::NpmPackage`] keyed on its first
-//!   dotted segment (stdlib vs. third-party classification is a later phase).
+//!   relative import must be internal). An unresolved **absolute** import is a
+//!   Python stdlib or pip module, modelled as [`ResolveResult::ExternalFile`]
+//!   so it never feeds the npm package.json dependency analysis. Real Python
+//!   dependency tracking (pyproject.toml) is a later phase.
 //!
 //! Known limitations (deferred): PEP 420 implicit namespace packages and
 //! multiple `sys.path` roots beyond the import-root walk.
@@ -157,8 +158,12 @@ fn resolve_absolute<F: Fn(&Path) -> Option<FileId>>(
     {
         return ResolveResult::InternalModule(id);
     }
-    let package = dotted.split('.').next().unwrap_or(dotted);
-    ResolveResult::NpmPackage(package.to_string())
+    // External: a Python stdlib or third-party (pip) module. Modelled as an
+    // external file rather than `NpmPackage`, so it never feeds the package.json
+    // dependency analysis (no false unlisted/unused-npm-dependency findings in
+    // mixed JS+Python repos). Python dependency manifests (pyproject.toml) are a
+    // later phase; until then external Python imports are silent.
+    ResolveResult::ExternalFile(PathBuf::from(dotted))
 }
 
 /// Module file extensions, in resolution priority: a real implementation
@@ -376,31 +381,32 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_absolute_import_is_external_package() {
+    fn unresolved_absolute_import_is_external_not_npm() {
+        // Python stdlib / pip packages must NOT be classified as npm packages,
+        // or they would surface as unlisted-npm-dependency findings in mixed
+        // repos that also contain a package.json.
         let index = file_index(&[("app.py", 0)]);
         let result = resolve_python_import(
             Path::new("app.py"),
             &import("requests", ImportedName::Namespace),
             &lookup_in(&index),
         );
-        match result {
-            ResolveResult::NpmPackage(name) => assert_eq!(name, "requests"),
-            other => panic!("expected NpmPackage, got {other:?}"),
-        }
+        assert!(
+            matches!(result, ResolveResult::ExternalFile(_)),
+            "expected ExternalFile, got {result:?}"
+        );
+        assert!(result.package_usage_name().is_none());
     }
 
     #[test]
-    fn unresolved_absolute_dotted_import_uses_first_segment() {
+    fn unresolved_absolute_dotted_import_is_external() {
         let index = file_index(&[("app.py", 0)]);
         let result = resolve_python_import(
             Path::new("app.py"),
             &import("os.path", ImportedName::Namespace),
             &lookup_in(&index),
         );
-        match result {
-            ResolveResult::NpmPackage(name) => assert_eq!(name, "os"),
-            other => panic!("expected NpmPackage, got {other:?}"),
-        }
+        assert!(matches!(result, ResolveResult::ExternalFile(_)));
     }
 
     #[test]
