@@ -173,6 +173,20 @@ fn extract_exports(body: &[Stmt]) -> Vec<ExportInfo> {
                     }
                 }
             }
+            // Annotated module variables: `FOO: int = 1` and the value-less
+            // `FOO: int` (common in `.pyi` stubs). Ruff emits these as AnnAssign.
+            Stmt::AnnAssign(ann) => {
+                if let Expr::Name(name) = ann.target.as_ref() {
+                    let id = name.id.as_str();
+                    if id == "__all__" {
+                        if let Some(value) = &ann.value {
+                            explicit_all = Some(collect_string_list(value));
+                        }
+                    } else {
+                        candidates.push((id.to_string(), span_of(ann.range)));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -518,6 +532,33 @@ mod tests {
     fn module_level_assignment_is_exported() {
         let info = parse("VERSION = \"1.0\"\n_internal = 1\n");
         assert_eq!(export_names(&info), vec!["VERSION"]);
+    }
+
+    #[test]
+    fn annotated_assignment_is_exported() {
+        let info = parse("VERSION: str = \"1.0\"\n");
+        assert_eq!(export_names(&info), vec!["VERSION"]);
+    }
+
+    #[test]
+    fn annotated_declaration_without_value_is_exported() {
+        // Common in .pyi stubs: `NAME: type` with no assignment.
+        let info = parse("DEBUG: bool\n");
+        assert_eq!(export_names(&info), vec!["DEBUG"]);
+    }
+
+    #[test]
+    fn underscore_annotated_assignment_is_private() {
+        let info = parse("_secret: int = 1\npublic: int = 2\n");
+        assert_eq!(export_names(&info), vec!["public"]);
+    }
+
+    #[test]
+    fn dunder_all_as_annotated_assignment_restricts_exports() {
+        let info = parse(
+            "__all__: list[str] = [\"foo\"]\n\ndef foo():\n    pass\n\ndef bar():\n    pass\n",
+        );
+        assert_eq!(export_names(&info), vec!["foo"]);
     }
 
     #[test]

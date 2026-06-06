@@ -129,7 +129,12 @@ pub const PRODUCTION_EXCLUDE_PATTERNS: &[&str] = &[
 /// must never be walked as project source. Hidden virtualenvs (`.venv`,
 /// `.tox`) are already pruned by the hidden-directory filter; these are their
 /// non-dotted siblings plus the bytecode cache.
-pub const EXCLUDED_DEPENDENCY_DIRS: &[&str] = &["venv", "env", "site-packages", "__pycache__"];
+///
+/// Deliberately excludes the bare name `env`: it is a common real source/config
+/// directory (`src/env/`, `app/env/`), so pruning it would drop legitimate
+/// files for every language. A virtualenv literally named `env` is rare and
+/// virtually always already in `.gitignore` (honored by the walker).
+pub const EXCLUDED_DEPENDENCY_DIRS: &[&str] = &["venv", "site-packages", "__pycache__"];
 
 /// Check if a hidden directory name is on the allowlist.
 pub fn is_allowed_hidden_dir(name: &OsStr) -> bool {
@@ -317,7 +322,6 @@ mod tests {
     #[test]
     fn excluded_dependency_dirs() {
         assert!(is_excluded_dependency_dir_name(OsStr::new("venv")));
-        assert!(is_excluded_dependency_dir_name(OsStr::new("env")));
         assert!(is_excluded_dependency_dir_name(OsStr::new("site-packages")));
         assert!(is_excluded_dependency_dir_name(OsStr::new("__pycache__")));
     }
@@ -327,6 +331,8 @@ mod tests {
         assert!(!is_excluded_dependency_dir_name(OsStr::new("src")));
         assert!(!is_excluded_dependency_dir_name(OsStr::new("app")));
         assert!(!is_excluded_dependency_dir_name(OsStr::new("environment")));
+        // `env` is a legitimate source/config directory name and must not be pruned.
+        assert!(!is_excluded_dependency_dir_name(OsStr::new("env")));
     }
 
     #[test]

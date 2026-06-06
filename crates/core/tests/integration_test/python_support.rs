@@ -181,6 +181,29 @@ fn python_stub_only_package_init_is_entry_point() {
 }
 
 #[test]
+fn python_annotated_module_exports_are_detected() {
+    // Annotated module variables (`NAME: type = ...`) are exports too: the
+    // imported one is credited, the unimported one reports as unused.
+    let root = fixture_path("python/annotated_exports");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export.export_name.as_str())
+        .collect();
+    assert!(
+        unused.contains(&"UNUSED_CONST"),
+        "annotated UNUSED_CONST should be a detectable unused export, got: {unused:?}"
+    );
+    assert!(
+        !unused.contains(&"SETTINGS"),
+        "annotated SETTINGS is imported and should be credited, got: {unused:?}"
+    );
+}
+
+#[test]
 fn python_venv_directory_is_excluded() {
     let root = fixture_path("python/venv_excluded");
     let config = create_config(root);
