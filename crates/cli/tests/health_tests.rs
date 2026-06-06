@@ -409,6 +409,44 @@ fn health_reports_angular_template_complexity() {
 }
 
 #[test]
+fn health_reports_python_function_complexity() {
+    let output = run_fallow(
+        "health",
+        "python/health_complexity",
+        &[
+            "--complexity",
+            "--max-cyclomatic",
+            "5",
+            "--max-crap",
+            "100000",
+            "--format",
+            "json",
+            "--quiet",
+        ],
+    );
+    let json = parse_json(&output);
+    let findings = json["findings"].as_array().expect("findings array");
+
+    let tangled = findings
+        .iter()
+        .find(|finding| {
+            finding["name"] == "tangled"
+                && finding["path"]
+                    .as_str()
+                    .is_some_and(|p| p.ends_with("app.py"))
+        })
+        .unwrap_or_else(|| panic!("expected Python `tangled` finding, got: {findings:#?}"));
+    assert_eq!(tangled["cyclomatic"].as_u64(), Some(11));
+    assert_eq!(tangled["param_count"].as_u64(), Some(4));
+
+    // The trivial `simple` function stays below threshold and must not surface.
+    assert!(
+        !findings.iter().any(|finding| finding["name"] == "simple"),
+        "trivial Python function should not be flagged, got: {findings:#?}"
+    );
+}
+
+#[test]
 fn health_emits_component_rollup_for_angular_component() {
     let output = run_fallow(
         "health",

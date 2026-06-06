@@ -72,7 +72,7 @@ fn parse_source_to_module_inner(
         return parse_graphql_to_module(file_id, source, content_hash);
     }
     if is_python_file(path) {
-        return parse_python_to_module(file_id, path, source, content_hash);
+        return parse_python_to_module(file_id, path, source, content_hash, need_complexity);
     }
     if is_html_file(path) {
         return parse_html_to_module_with_complexity(

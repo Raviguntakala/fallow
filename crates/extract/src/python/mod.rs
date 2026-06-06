@@ -22,6 +22,11 @@
 //! default, see `.claude/rules/workflow.md`): if `__all__` is present, exactly
 //! those names; otherwise all module-level `def`/`class`/simple assignments
 //! whose name does not start with `_`.
+//!
+//! Per-function cyclomatic/cognitive complexity lives in the [`complexity`]
+//! submodule and is computed from the same Ruff parse.
+
+mod complexity;
 
 use std::path::Path;
 
@@ -356,19 +361,28 @@ pub fn parse_python_to_module(
     path: &Path,
     source: &str,
     content_hash: u64,
+    need_complexity: bool,
 ) -> ModuleInfo {
     let is_init = is_init_module(path);
     let parsed_suppressions = crate::suppress::parse_suppressions_from_source(source);
-    let (imports, exports, re_exports) = match ruff_python_parser::parse_module(source) {
+    let line_offsets = fallow_types::extract::compute_line_offsets(source);
+    let (imports, exports, re_exports, complexity) = match ruff_python_parser::parse_module(source)
+    {
         Ok(parsed) => {
             let body = &parsed.syntax().body;
+            let complexity = if need_complexity {
+                complexity::compute_complexity(body, source, &line_offsets)
+            } else {
+                Vec::new()
+            };
             (
                 extract_imports(body, is_init),
                 extract_exports(body),
                 extract_re_exports(body, is_init),
+                complexity,
             )
         }
-        Err(_) => (Vec::new(), Vec::new(), Vec::new()),
+        Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     };
 
     ModuleInfo {
@@ -389,8 +403,8 @@ pub fn parse_python_to_module(
         unused_import_bindings: Vec::new(),
         type_referenced_import_bindings: Vec::new(),
         value_referenced_import_bindings: Vec::new(),
-        line_offsets: fallow_types::extract::compute_line_offsets(source),
-        complexity: Vec::new(),
+        line_offsets,
+        complexity,
         flag_uses: Vec::new(),
         class_heritage: Vec::new(),
         injection_tokens: Vec::new(),
@@ -412,11 +426,11 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> ModuleInfo {
-        parse_python_to_module(FileId(0), Path::new("m.py"), src, 0)
+        parse_python_to_module(FileId(0), Path::new("m.py"), src, 0, true)
     }
 
     fn parse_at(path: &str, src: &str) -> ModuleInfo {
-        parse_python_to_module(FileId(0), Path::new(path), src, 0)
+        parse_python_to_module(FileId(0), Path::new(path), src, 0, true)
     }
 
     fn export_names(info: &ModuleInfo) -> Vec<String> {
