@@ -82,6 +82,22 @@ pub enum KeywordType {
     Readonly,
     Keyof,
     Satisfies,
+    // Python keywords (appended to keep bitcode discriminants stable). Reused
+    // JS/TS variants cover `as/async/await/break/case/class/continue/else/
+    // finally/for/from/if/import/in/return/try/type/while/yield`.
+    Def,
+    Elif,
+    Pass,
+    With,
+    Lambda,
+    Assert,
+    Del,
+    Except,
+    Global,
+    Nonlocal,
+    Raise,
+    Is,
+    Match,
 }
 
 /// Operator categories.

@@ -13,6 +13,7 @@ pub mod normalize;
 mod shingle_filter;
 pub mod token_types;
 mod token_visitor;
+mod token_visitor_py;
 pub mod tokenize;
 pub(crate) mod types;
 

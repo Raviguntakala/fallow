@@ -60,6 +60,9 @@ fn tokenize_file_inner(
     if ext == "css" || ext == "scss" {
         return empty_tokens(source);
     }
+    if ext == "py" || ext == "pyi" {
+        return super::token_visitor_py::tokenize_python(source);
+    }
 
     tokenize_js_ts(path, source, strip_types, skip_imports)
 }

@@ -273,7 +273,7 @@ pub(super) const CACHE_VERSION: u32 = 135;
 
 /// Duplication token cache version. Bump when duplicate tokenization,
 /// normalization, or the on-disk token cache schema changes.
-pub const DUPES_CACHE_VERSION: u32 = 4;
+pub const DUPES_CACHE_VERSION: u32 = 5;
 
 /// Default maximum cache size (256 MB). Overridable per-project via
 /// `cache.maxSizeMb` in the config file or `FALLOW_CACHE_MAX_SIZE` env var.
