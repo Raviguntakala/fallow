@@ -14,6 +14,7 @@ use crate::glimmer::{is_glimmer_file, strip_glimmer_templates};
 use crate::graphql::{is_graphql_file, parse_graphql_to_module};
 use crate::html::{is_html_file, parse_html_to_module_with_complexity};
 use crate::mdx::{is_mdx_file, parse_mdx_to_module};
+use crate::python::{is_python_file, parse_python_to_module};
 use crate::sfc::{is_sfc_file, parse_sfc_to_module};
 use crate::visitor::ModuleInfoExtractor;
 use fallow_types::discover::FileId;
@@ -69,6 +70,9 @@ fn parse_source_to_module_inner(
     }
     if is_graphql_file(path) {
         return parse_graphql_to_module(file_id, source, content_hash);
+    }
+    if is_python_file(path) {
+        return parse_python_to_module(file_id, path, source, content_hash, need_complexity);
     }
     if is_html_file(path) {
         return parse_html_to_module_with_complexity(
@@ -823,6 +827,25 @@ mod tests {
     use fallow_types::discover::FileId;
     use fallow_types::extract::{ImportInfo, ImportedName};
     use std::path::Path;
+
+    #[test]
+    fn dispatches_python_files_to_python_extractor() {
+        let info = parse_source_to_module(
+            FileId(0),
+            Path::new("pkg/mod.py"),
+            "import os\nfrom .utils import helper\n\ndef main():\n    pass\n",
+            0,
+            false,
+        );
+        let sources: Vec<&str> = info.imports.iter().map(|i| i.source.as_str()).collect();
+        assert_eq!(sources, vec!["os", ".utils"]);
+        assert_eq!(
+            info.imports[1].imported_name,
+            ImportedName::Named("helper".to_string())
+        );
+        let exports: Vec<String> = info.exports.iter().map(|e| e.name.to_string()).collect();
+        assert_eq!(exports, vec!["main"]);
+    }
 
     #[test]
     fn has_public_tag_matches_bare_tag() {

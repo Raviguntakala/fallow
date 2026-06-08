@@ -42,6 +42,7 @@ use crate::results::{
     UnresolvedCatalogReference, UnresolvedImport, UnusedCatalogEntry, UnusedDependency,
     UnusedDependencyOverride, UnusedExport, UnusedFile, UnusedMember,
 };
+use crate::suppress::{comment_prefix, comment_prefix_for};
 
 /// Shared note for the `duplicate-exports` fix action. Mirrors the const used
 /// by the human report (see `crates/cli/src/report/shared.rs`); kept here so
@@ -88,6 +89,7 @@ impl UnusedFileFinding {
     /// by `annotate_dead_code_json` if the audit pass runs.
     #[must_use]
     pub fn with_actions(file: UnusedFile) -> Self {
+        let prefix = comment_prefix(&file.path);
         let actions = vec![
             IssueAction::Fix(FixAction {
                 kind: FixActionType::DeleteFile,
@@ -105,7 +107,7 @@ impl UnusedFileFinding {
                 auto_fixable: false,
                 description: "Suppress with a file-level comment at the top of the file"
                     .to_string(),
-                comment: "// fallow-ignore-file unused-file".to_string(),
+                comment: format!("{prefix} fallow-ignore-file unused-file"),
             }),
         ];
         Self {
@@ -138,6 +140,7 @@ impl PrivateTypeLeakFinding {
     /// Build the wrapper from a raw [`PrivateTypeLeak`].
     #[must_use]
     pub fn with_actions(leak: PrivateTypeLeak) -> Self {
+        let prefix = comment_prefix(&leak.path);
         let actions = vec![
             IssueAction::Fix(FixAction {
                 kind: FixActionType::ExportType,
@@ -153,7 +156,7 @@ impl PrivateTypeLeakFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line private-type-leak".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line private-type-leak"),
                 scope: None,
             }),
         ];
@@ -188,6 +191,7 @@ impl UnresolvedImportFinding {
     /// Build the wrapper from a raw [`UnresolvedImport`].
     #[must_use]
     pub fn with_actions(import: UnresolvedImport) -> Self {
+        let prefix = comment_prefix(&import.path);
         let actions = vec![
             IssueAction::Fix(FixAction {
                 kind: FixActionType::ResolveImport,
@@ -217,7 +221,7 @@ impl UnresolvedImportFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line unresolved-import".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line unresolved-import"),
                 scope: None,
             }),
         ];
@@ -252,6 +256,7 @@ impl CircularDependencyFinding {
     /// Build the wrapper from a raw [`CircularDependency`].
     #[must_use]
     pub fn with_actions(cycle: CircularDependency) -> Self {
+        let prefix = comment_prefix_for(cycle.files.first().map(std::path::PathBuf::as_path));
         let actions = vec![
             IssueAction::Fix(FixAction {
                 kind: FixActionType::RefactorCycle,
@@ -269,7 +274,7 @@ impl CircularDependencyFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line circular-dependency".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line circular-dependency"),
                 scope: None,
             }),
         ];
@@ -312,6 +317,7 @@ impl ReExportCycleFinding {
     /// consumers see context for why one file-level suppression suffices.
     #[must_use]
     pub fn with_actions(cycle: ReExportCycle) -> Self {
+        let prefix = comment_prefix_for(cycle.files.first().map(std::path::PathBuf::as_path));
         // The description is a path-free hint about the suppression's
         // structural effect; the cycle's member list already ships in the
         // sibling `files` field, so consumers can correlate without
@@ -350,7 +356,7 @@ impl ReExportCycleFinding {
                 kind: SuppressFileKind::SuppressFile,
                 auto_fixable: false,
                 description: suppress_description,
-                comment: "// fallow-ignore-file re-export-cycle".to_string(),
+                comment: format!("{prefix} fallow-ignore-file re-export-cycle"),
             }),
         ];
         Self {
@@ -384,6 +390,7 @@ impl BoundaryViolationFinding {
     /// Build the wrapper from a raw [`BoundaryViolation`].
     #[must_use]
     pub fn with_actions(violation: BoundaryViolation) -> Self {
+        let prefix = comment_prefix(&violation.from_path);
         let actions = vec![
             IssueAction::Fix(FixAction {
                 kind: FixActionType::RefactorBoundary,
@@ -401,7 +408,7 @@ impl BoundaryViolationFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line boundary-violation".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line boundary-violation"),
                 scope: None,
             }),
         ];
@@ -438,6 +445,7 @@ impl UnusedExportFinding {
     /// `note` is absent on the fix action.
     #[must_use]
     pub fn with_actions(export: UnusedExport) -> Self {
+        let prefix = comment_prefix(&export.path);
         let note = if export.is_re_export {
             Some(
                 "This finding originates from a re-export; verify it is not part of your public API before removing"
@@ -459,7 +467,7 @@ impl UnusedExportFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line unused-export".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line unused-export"),
                 scope: None,
             }),
         ];
@@ -495,6 +503,7 @@ impl UnusedTypeFinding {
     /// [`UnusedExportFinding::with_actions`].
     #[must_use]
     pub fn with_actions(export: UnusedExport) -> Self {
+        let prefix = comment_prefix(&export.path);
         let note = if export.is_re_export {
             Some(
                 "This finding originates from a re-export; verify it is not part of your public API before removing"
@@ -518,7 +527,7 @@ impl UnusedTypeFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line unused-type".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line unused-type"),
                 scope: None,
             }),
         ];
@@ -551,6 +560,7 @@ impl UnusedEnumMemberFinding {
     /// Build the wrapper from a raw [`UnusedMember`].
     #[must_use]
     pub fn with_actions(member: UnusedMember) -> Self {
+        let prefix = comment_prefix(&member.path);
         let actions = vec![
             IssueAction::Fix(FixAction {
                 kind: FixActionType::RemoveEnumMember,
@@ -564,7 +574,7 @@ impl UnusedEnumMemberFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line unused-enum-member".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line unused-enum-member"),
                 scope: None,
             }),
         ];
@@ -602,6 +612,7 @@ impl UnusedClassMemberFinding {
     /// attached.
     #[must_use]
     pub fn with_actions(member: UnusedMember) -> Self {
+        let prefix = comment_prefix(&member.path);
         let actions = vec![
             IssueAction::Fix(FixAction {
                 kind: FixActionType::RemoveClassMember,
@@ -617,7 +628,7 @@ impl UnusedClassMemberFinding {
                 kind: SuppressLineKind::SuppressLine,
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the line".to_string(),
-                comment: "// fallow-ignore-next-line unused-class-member".to_string(),
+                comment: format!("{prefix} fallow-ignore-next-line unused-class-member"),
                 scope: None,
             }),
         ];
@@ -1001,11 +1012,17 @@ impl DuplicateExportFinding {
             suggested_target: None,
         }));
 
+        let prefix = comment_prefix_for(
+            export
+                .locations
+                .first()
+                .map(|location| location.path.as_path()),
+        );
         actions.push(IssueAction::SuppressLine(SuppressLineAction {
             kind: SuppressLineKind::SuppressLine,
             auto_fixable: false,
             description: "Suppress with an inline comment above the line".to_string(),
-            comment: "// fallow-ignore-next-line duplicate-export".to_string(),
+            comment: format!("{prefix} fallow-ignore-next-line duplicate-export"),
             scope: Some(SuppressLineScope::PerLocation),
         }));
 

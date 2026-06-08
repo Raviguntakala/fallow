@@ -99,7 +99,7 @@ impl<'s> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder<'s> {
 
 pub const SOURCE_EXTENSIONS: &[&str] = &[
     "ts", "tsx", "mts", "cts", "gts", "js", "jsx", "mjs", "cjs", "gjs", "vue", "svelte", "astro",
-    "mdx", "css", "scss", "html", "graphql", "gql",
+    "mdx", "css", "scss", "html", "graphql", "gql", "py", "pyi",
 ];
 
 /// Glob patterns for test/dev/story files excluded in production mode.
@@ -125,9 +125,33 @@ pub const PRODUCTION_EXCLUDE_PATTERNS: &[&str] = &[
     "**/.*.cjs",
 ];
 
+/// Non-hidden directories that hold installed packages or build caches and
+/// must never be walked as project source. Hidden virtualenvs (`.venv`,
+/// `.tox`) are already pruned by the hidden-directory filter; these are their
+/// non-dotted siblings plus the bytecode cache.
+///
+/// Deliberately excludes the bare name `env`: it is a common real source/config
+/// directory (`src/env/`, `app/env/`), so pruning it would drop legitimate
+/// files for every language. A virtualenv literally named `env` is rare and
+/// virtually always already in `.gitignore` (honored by the walker).
+pub const EXCLUDED_DEPENDENCY_DIRS: &[&str] = &["venv", "site-packages", "__pycache__"];
+
 /// Check if a hidden directory name is on the allowlist.
 pub fn is_allowed_hidden_dir(name: &OsStr) -> bool {
     ALLOWED_HIDDEN_DIRS.iter().any(|&d| OsStr::new(d) == name)
+}
+
+/// Whether a directory name is an installed-package / cache directory to skip.
+pub fn is_excluded_dependency_dir_name(name: &OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|n| EXCLUDED_DEPENDENCY_DIRS.contains(&n))
+}
+
+/// Whether a walk entry is a directory that should be pruned as a dependency
+/// or cache root.
+fn is_excluded_dependency_dir(entry: &ignore::DirEntry) -> bool {
+    entry.file_type().is_some_and(|ft| ft.is_dir())
+        && is_excluded_dependency_dir_name(entry.file_name())
 }
 
 fn is_allowed_scoped_hidden_dir(
@@ -214,10 +238,13 @@ pub fn discover_files_with_additional_hidden_dirs(
         .types(types)
         .threads(config.threads);
     if additional_hidden_dir_scopes.is_empty() {
-        walk_builder.filter_entry(is_allowed_hidden);
+        walk_builder
+            .filter_entry(|entry| is_allowed_hidden(entry) && !is_excluded_dependency_dir(entry));
     } else {
         let scopes = additional_hidden_dir_scopes.to_vec();
-        walk_builder.filter_entry(move |entry| is_allowed_hidden_with_scopes(entry, &scopes));
+        walk_builder.filter_entry(move |entry| {
+            is_allowed_hidden_with_scopes(entry, &scopes) && !is_excluded_dependency_dir(entry)
+        });
     }
 
     let production_excludes = if config.production {
@@ -290,6 +317,22 @@ mod tests {
     fn non_hidden_dirs_not_in_allowlist() {
         assert!(!is_allowed_hidden_dir(OsStr::new("src")));
         assert!(!is_allowed_hidden_dir(OsStr::new("node_modules")));
+    }
+
+    #[test]
+    fn excluded_dependency_dirs() {
+        assert!(is_excluded_dependency_dir_name(OsStr::new("venv")));
+        assert!(is_excluded_dependency_dir_name(OsStr::new("site-packages")));
+        assert!(is_excluded_dependency_dir_name(OsStr::new("__pycache__")));
+    }
+
+    #[test]
+    fn source_dirs_not_excluded_as_dependency() {
+        assert!(!is_excluded_dependency_dir_name(OsStr::new("src")));
+        assert!(!is_excluded_dependency_dir_name(OsStr::new("app")));
+        assert!(!is_excluded_dependency_dir_name(OsStr::new("environment")));
+        // `env` is a legitimate source/config directory name and must not be pruned.
+        assert!(!is_excluded_dependency_dir_name(OsStr::new("env")));
     }
 
     #[test]

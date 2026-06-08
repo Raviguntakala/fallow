@@ -7,6 +7,7 @@ use std::time::Duration;
 use fallow_core::duplicates::DuplicationReport;
 use fallow_core::results::AnalysisResults;
 use fallow_types::envelope::{CheckSummary, ElapsedMs, EntryPoints, SchemaVersion, ToolVersion};
+use fallow_types::suppress::comment_prefix;
 
 use super::{emit_json, normalize_uri};
 use crate::explain;
@@ -353,7 +354,8 @@ fn rewrite_suppress_line_actions(
             if let Some(anchor) = suppression_anchor(map)
                 && let Some(kinds) = anchors.get(&anchor)
             {
-                let comment = format!("// fallow-ignore-next-line {}", kinds.join(", "));
+                let prefix = comment_prefix(Path::new(&anchor.0));
+                let comment = format!("{prefix} fallow-ignore-next-line {}", kinds.join(", "));
                 if let Some(actions) = map
                     .get_mut("actions")
                     .and_then(serde_json::Value::as_array_mut)
@@ -397,8 +399,9 @@ fn suppress_line_comment(action: &serde_json::Value) -> Option<&str> {
 }
 
 fn parse_suppress_line_comment(comment: &str) -> Vec<String> {
-    comment
-        .strip_prefix("// fallow-ignore-next-line ")
+    ["// fallow-ignore-next-line ", "# fallow-ignore-next-line "]
+        .into_iter()
+        .find_map(|prefix| comment.strip_prefix(prefix))
         .map(|rest| {
             rest.split(|c: char| c == ',' || c.is_whitespace())
                 .filter(|token| !token.is_empty())

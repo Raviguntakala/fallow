@@ -355,12 +355,60 @@ pub fn closest_known_kind_name(input: &str) -> Option<&'static str> {
         .map(|(name, _)| name)
 }
 
+/// Choose the line-comment token for a suggested `fallow-ignore-*` comment
+/// based on the finding's source file.
+///
+/// Python uses `#` for comments (`//` is its floor-division operator, so a
+/// `// fallow-ignore-...` suggestion would be a `SyntaxError` if pasted
+/// in). Every other supported source language uses `//`; HTML templates are
+/// handled separately with `<!-- -->` since they need a wrapped form, not a
+/// bare prefix.
+#[must_use]
+pub fn comment_prefix(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(std::ffi::OsStr::to_str) {
+        Some(ext) if ext.eq_ignore_ascii_case("py") || ext.eq_ignore_ascii_case("pyi") => "#",
+        _ => "//",
+    }
+}
+
+/// Like [`comment_prefix`], but for findings whose representative path is
+/// optional (e.g. the first file of a multi-file cycle, or `None` when the
+/// collection is empty). Falls back to `//`, the comment style shared by
+/// every supported language but Python.
+#[must_use]
+pub fn comment_prefix_for(path: Option<&std::path::Path>) -> &'static str {
+    path.map_or("//", comment_prefix)
+}
+
 const _: () = assert!(std::mem::size_of::<Suppression>() == 12);
 const _: () = assert!(std::mem::size_of::<IssueKind>() == 1);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn comment_prefix_for_python_paths() {
+        assert_eq!(comment_prefix(Path::new("foo.py")), "#");
+        assert_eq!(comment_prefix(Path::new("foo.pyi")), "#");
+        assert_eq!(comment_prefix(Path::new("src/pkg/mod.PY")), "#");
+    }
+
+    #[test]
+    fn comment_prefix_for_other_paths() {
+        assert_eq!(comment_prefix(Path::new("foo.ts")), "//");
+        assert_eq!(comment_prefix(Path::new("foo.js")), "//");
+        assert_eq!(comment_prefix(Path::new("foo.vue")), "//");
+        assert_eq!(comment_prefix(Path::new("noext")), "//");
+    }
+
+    #[test]
+    fn comment_prefix_for_optional_paths() {
+        assert_eq!(comment_prefix_for(Some(Path::new("foo.py"))), "#");
+        assert_eq!(comment_prefix_for(Some(Path::new("foo.ts"))), "//");
+        assert_eq!(comment_prefix_for(None), "//");
+    }
 
     #[test]
     fn issue_kind_from_str_all_variants() {

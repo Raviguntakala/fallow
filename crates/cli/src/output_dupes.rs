@@ -27,6 +27,7 @@ use fallow_core::duplicates::{
 };
 use fallow_types::envelope::AuditIntroduced;
 use fallow_types::serde_path;
+use fallow_types::suppress::comment_prefix_for;
 use serde::Serialize;
 
 use crate::report::dupes_grouping::AttributedCloneGroup;
@@ -109,8 +110,16 @@ pub enum CloneFamilyActionType {
     SuppressLine,
 }
 
-const SUPPRESS_COMMENT: &str = "// fallow-ignore-next-line code-duplication";
 const SUPPRESS_DESCRIPTION: &str = "Suppress with an inline comment above the duplicated code";
+
+/// Suggested suppression comment for a clone group, using the comment syntax
+/// of its first instance's source file (clone groups virtually always share
+/// one language; this mirrors the `cycle.files[0]` heuristic used for
+/// circular-dependency findings).
+fn suppress_comment_for(path: Option<&std::path::Path>) -> String {
+    let prefix = comment_prefix_for(path);
+    format!("{prefix} fallow-ignore-next-line code-duplication")
+}
 
 /// Wire-shape envelope for a [`CloneGroup`] finding. Flattens the bare
 /// group via `#[serde(flatten)]` and carries a typed `actions` array plus
@@ -165,6 +174,12 @@ impl CloneGroupFinding {
         let suggested_name = fallow_core::duplicates::deepdive::dominant_identifier(&group);
         let line_count = group.line_count;
         let instance_count = group.instances.len();
+        let suppress_comment = suppress_comment_for(
+            group
+                .instances
+                .first()
+                .map(|instance| instance.file.as_path()),
+        );
         let actions = vec![
             CloneGroupAction {
                 kind: CloneGroupActionType::ExtractShared,
@@ -179,7 +194,7 @@ impl CloneGroupFinding {
                 kind: CloneGroupActionType::SuppressLine,
                 auto_fixable: false,
                 description: SUPPRESS_DESCRIPTION.to_string(),
-                comment: Some(SUPPRESS_COMMENT.to_string()),
+                comment: Some(suppress_comment),
             },
         ];
         Self {
@@ -272,6 +287,12 @@ fn build_clone_family_actions(
     suggestions: &[RefactoringSuggestion],
 ) -> Vec<CloneFamilyAction> {
     let group_count = groups.len();
+    let suppress_comment = suppress_comment_for(
+        groups
+            .first()
+            .and_then(|group| group.instances.first())
+            .map(|instance| instance.file.as_path()),
+    );
     let mut actions = Vec::with_capacity(2 + suggestions.len());
     actions.push(CloneFamilyAction {
         kind: CloneFamilyActionType::ExtractShared,
@@ -300,7 +321,7 @@ fn build_clone_family_actions(
         auto_fixable: false,
         description: SUPPRESS_DESCRIPTION.to_string(),
         note: None,
-        comment: Some(SUPPRESS_COMMENT.to_string()),
+        comment: Some(suppress_comment),
     });
     actions
 }
@@ -347,6 +368,12 @@ impl AttributedCloneGroupFinding {
     pub fn with_fingerprint(group: AttributedCloneGroup, fingerprint: String) -> Self {
         let line_count = group.line_count;
         let instance_count = group.instances.len();
+        let suppress_comment = suppress_comment_for(
+            group
+                .instances
+                .first()
+                .map(|attributed| attributed.instance.file.as_path()),
+        );
         let actions = vec![
             CloneGroupAction {
                 kind: CloneGroupActionType::ExtractShared,
@@ -361,7 +388,7 @@ impl AttributedCloneGroupFinding {
                 kind: CloneGroupActionType::SuppressLine,
                 auto_fixable: false,
                 description: SUPPRESS_DESCRIPTION.to_string(),
-                comment: Some(SUPPRESS_COMMENT.to_string()),
+                comment: Some(suppress_comment),
             },
         ];
         Self {

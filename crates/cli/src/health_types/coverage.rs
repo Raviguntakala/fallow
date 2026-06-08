@@ -4,6 +4,7 @@ use fallow_types::output_health::{
     UntestedExportAction, UntestedExportActionType, UntestedFileAction, UntestedFileActionType,
 };
 use fallow_types::serde_path;
+use fallow_types::suppress::comment_prefix;
 
 /// Runtime code that no test dependency path reaches.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -56,6 +57,7 @@ impl UntestedFileFinding {
     #[must_use]
     pub fn with_actions(file: UntestedFile, root: &Path) -> Self {
         let display_path = relative_display(&file.path, root);
+        let prefix = comment_prefix(&file.path);
         let actions = vec![
             UntestedFileAction {
                 kind: UntestedFileActionType::AddTests,
@@ -69,7 +71,7 @@ impl UntestedFileFinding {
                 auto_fixable: false,
                 description: format!("Suppress coverage gap reporting for `{display_path}`"),
                 note: None,
-                comment: Some("// fallow-ignore-file coverage-gaps".to_string()),
+                comment: Some(format!("{prefix} fallow-ignore-file coverage-gaps")),
             },
         ];
         Self { file, actions }
@@ -96,6 +98,7 @@ impl UntestedExportFinding {
     pub fn with_actions(export: UntestedExport, root: &Path) -> Self {
         let display_path = relative_display(&export.path, root);
         let export_name = export.export_name.clone();
+        let prefix = comment_prefix(&export.path);
         let actions = vec![
             UntestedExportAction {
                 kind: UntestedExportActionType::AddTestImport,
@@ -112,7 +115,7 @@ impl UntestedExportFinding {
                 auto_fixable: false,
                 description: format!("Suppress coverage gap reporting for `{display_path}`"),
                 note: None,
-                comment: Some("// fallow-ignore-file coverage-gaps".to_string()),
+                comment: Some(format!("{prefix} fallow-ignore-file coverage-gaps")),
             },
         ];
         Self { export, actions }

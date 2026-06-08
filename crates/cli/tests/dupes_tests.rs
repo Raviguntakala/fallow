@@ -484,3 +484,53 @@ fn dupes_includes_plugin_scoped_hidden_dirs_for_react_router() {
         "expected stats.total_files >= 5 (root + routes + .client + .server), got {total_files}"
     );
 }
+
+/// `fallow dupes` must tokenize `.py` files (via the Ruff lexer token mapper)
+/// and surface a cross-file clone group spanning the two Python modules that
+/// share an identical `compute_totals` body.
+#[test]
+fn dupes_detects_python_cross_file_clone() {
+    use std::path::Path;
+
+    let output = run_fallow("dupes", "python/clones", &["--format", "json", "--quiet"]);
+    assert_eq!(output.code, 0, "stderr was: {}", output.stderr);
+
+    let json = parse_json(&output);
+    let groups = json["clone_groups"].as_array().unwrap();
+    assert!(
+        !groups.is_empty(),
+        "python fixture should report a clone group. stdout: {}",
+        output.stdout
+    );
+
+    let spans_both = groups.iter().any(|group| {
+        let instances = group["instances"].as_array().unwrap();
+        let has_file = |name: &str| {
+            instances
+                .iter()
+                .any(|i| Path::new(i["file"].as_str().unwrap()).ends_with(name))
+        };
+        has_file("orders.py") && has_file("invoices.py")
+    });
+    assert!(
+        spans_both,
+        "expected a clone group across orders.py and invoices.py. stdout: {}",
+        output.stdout
+    );
+
+    let suppress_comment = groups
+        .iter()
+        .find_map(|group| {
+            group["actions"].as_array().and_then(|actions| {
+                actions
+                    .iter()
+                    .find(|action| action["type"] == "suppress-line")
+                    .and_then(|action| action["comment"].as_str())
+            })
+        })
+        .expect("expected a suppress-line action with a comment");
+    assert_eq!(
+        suppress_comment, "# fallow-ignore-next-line code-duplication",
+        "Python suppression comments must use `#`, not `//` (a SyntaxError waiting to happen)"
+    );
+}

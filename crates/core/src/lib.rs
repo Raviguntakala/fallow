@@ -1150,6 +1150,7 @@ fn summarize_entry_points(entry_points: &[discover::EntryPoint]) -> results::Ent
             discover::EntryPointSource::ManualEntry => "manual entry",
             discover::EntryPointSource::InfrastructureConfig => "config",
             discover::EntryPointSource::DynamicallyLoaded => "dynamically loaded",
+            discover::EntryPointSource::PythonEntry => "python entry",
         };
         *counts.entry(category.to_string()).or_insert(0) += 1;
     }

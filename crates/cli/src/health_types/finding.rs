@@ -7,6 +7,7 @@ use fallow_types::output_health::{
     HealthFindingAction, HealthFindingActionType, HotspotAction, HotspotActionHeuristic,
     HotspotActionType, RefactoringTargetAction, RefactoringTargetActionType,
 };
+use fallow_types::suppress::comment_prefix;
 use std::ops::Deref;
 use std::path::Path;
 
@@ -188,6 +189,7 @@ pub fn build_health_finding_actions(
     }
 
     if !ctx.opts.omit_suppress_line {
+        let prefix = comment_prefix(&violation.path);
         if is_template
             && violation
                 .path
@@ -210,7 +212,7 @@ pub fn build_health_finding_actions(
                 description: "Suppress with an inline comment above the Angular decorator"
                     .to_string(),
                 note: None,
-                comment: Some("// fallow-ignore-next-line complexity".to_string()),
+                comment: Some(format!("{prefix} fallow-ignore-next-line complexity")),
                 placement: Some("above-angular-decorator".to_string()),
                 target_path: None,
             });
@@ -220,7 +222,7 @@ pub fn build_health_finding_actions(
                 auto_fixable: false,
                 description: "Suppress with an inline comment above the worst class method (the rollup is anchored at that method's line, so a comment above it hides both the function finding and the rollup)".to_string(),
                 note: None,
-                comment: Some("// fallow-ignore-next-line complexity".to_string()),
+                comment: Some(format!("{prefix} fallow-ignore-next-line complexity")),
                 placement: Some("above-component-worst-method".to_string()),
                 target_path: None,
             });
@@ -231,7 +233,7 @@ pub fn build_health_finding_actions(
                 description: "Suppress with an inline comment above the function declaration"
                     .to_string(),
                 note: None,
-                comment: Some("// fallow-ignore-next-line complexity".to_string()),
+                comment: Some(format!("{prefix} fallow-ignore-next-line complexity")),
                 placement: Some("above-function-declaration".to_string()),
                 target_path: None,
             });
@@ -585,12 +587,13 @@ fn build_refactoring_target_actions(target: &RefactoringTarget) -> Vec<Refactori
     }];
 
     if target.evidence.is_some() {
+        let prefix = comment_prefix(&target.path);
         actions.push(RefactoringTargetAction {
             kind: RefactoringTargetActionType::SuppressLine,
             auto_fixable: false,
             description: "Suppress the underlying complexity finding".to_string(),
             category: None,
-            comment: Some("// fallow-ignore-next-line complexity".to_string()),
+            comment: Some(format!("{prefix} fallow-ignore-next-line complexity")),
         });
     }
 

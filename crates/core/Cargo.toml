@@ -29,6 +29,9 @@ oxc_semantic = { workspace = true }
 oxc_span = { workspace = true }
 oxc_str = { workspace = true }
 oxc_syntax = { workspace = true }
+ruff_python_parser = { workspace = true }
+ruff_python_ast = { workspace = true }
+ruff_text_size = { workspace = true }
 
 # Parallelism
 rayon = { workspace = true }
