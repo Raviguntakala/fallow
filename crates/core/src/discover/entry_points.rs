@@ -1,4 +1,7 @@
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use super::parse_scripts::extract_script_file_refs;
 use super::walk::SOURCE_EXTENSIONS;
@@ -425,6 +428,30 @@ fn is_python_entry_filename(path: &Path) -> bool {
             .is_some_and(|stem| stem == "__main__" || stem == "__init__")
 }
 
+/// Matches Python's `if __name__ == "__main__":` guard, the convention for
+/// marking a module directly runnable regardless of its filename. Anchored to
+/// line start (with `(?m)`) so the guard must sit at statement position;
+/// quote style and surrounding whitespace both vary across the ecosystem.
+#[expect(
+    clippy::expect_used,
+    reason = "static main-guard regex pattern is hard-coded and covered by tests"
+)]
+static MAIN_GUARD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^\s*if\s+__name__\s*==\s*(?:"__main__"|'__main__')\s*:"#)
+        .expect("valid regex")
+});
+
+/// Whether `path` is a Python source containing an `if __name__ == "__main__":`
+/// guard — any filename can be a runnable entry point this way, unlike
+/// `__main__.py`/`__init__.py`. Entry-point discovery runs before parsing
+/// (`DiscoveredFile` carries no source), so this reads the file directly;
+/// matches ADR-001 "syntactic only, never panic" by returning `false` on
+/// read errors or non-Python files rather than failing the scan.
+fn has_main_guard(path: &Path) -> bool {
+    fallow_types::path_util::is_python_file(path)
+        && std::fs::read_to_string(path).is_ok_and(|source| MAIN_GUARD_RE.is_match(&source))
+}
+
 fn apply_default_fallback(
     files: &[DiscoveredFile],
     root: &Path,
@@ -549,11 +576,12 @@ fn discover_entry_points_with_warnings_impl(
         );
     }
 
-    // Python has no package.json; `__main__.py` (python -m / direct run) and
-    // `__init__.py` (package public surface) are the conventional reachability
-    // roots, so a real Python project is not reported wholly unused.
+    // Python has no package.json; `__main__.py` / `__init__.py` (conventional
+    // reachability roots) and any script with an `if __name__ == "__main__":`
+    // guard (Python's directly-runnable convention, independent of filename)
+    // keep a real Python project from being reported wholly unused.
     for file in files {
-        if is_python_entry_filename(&file.path) {
+        if is_python_entry_filename(&file.path) || has_main_guard(&file.path) {
             discovery.entries.push(EntryPoint {
                 path: file.path.clone(),
                 source: EntryPointSource::PythonEntry,
@@ -1122,6 +1150,61 @@ mod tests {
 
         assert!(set.is_match("composables/useFoo.ts"));
         assert!(!set.is_match("composables/nested/useFoo.ts"));
+    }
+
+    mod main_guard_tests {
+        use super::*;
+
+        #[test]
+        fn detects_guard_in_arbitrary_filename() {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            let script = dir.path().join("script.py");
+            std::fs::write(
+                &script,
+                "import sys\n\ndef main():\n    pass\n\nif __name__ == \"__main__\":\n    main()\n",
+            )
+            .unwrap();
+
+            assert!(
+                has_main_guard(&script),
+                "a runnable script with an `if __name__ == \"__main__\":` guard should be detected"
+            );
+        }
+
+        #[test]
+        fn detects_guard_with_single_quotes_and_no_spacing() {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            let script = dir.path().join("tool.py");
+            std::fs::write(&script, "if __name__=='__main__':\n    pass\n").unwrap();
+
+            assert!(has_main_guard(&script));
+        }
+
+        #[test]
+        fn ignores_modules_without_guard() {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            let module = dir.path().join("helpers.py");
+            std::fs::write(&module, "def helper():\n    return 1\n").unwrap();
+
+            assert!(!has_main_guard(&module));
+        }
+
+        #[test]
+        fn ignores_non_python_files() {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            let script = dir.path().join("script.sh");
+            std::fs::write(&script, "if __name__ == \"__main__\":\n    echo hi\n").unwrap();
+
+            assert!(!has_main_guard(&script));
+        }
+
+        #[test]
+        fn ignores_unreadable_paths() {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            let missing = dir.path().join("missing.py");
+
+            assert!(!has_main_guard(&missing));
+        }
     }
 
     #[test]

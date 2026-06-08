@@ -517,4 +517,20 @@ fn dupes_detects_python_cross_file_clone() {
         "expected a clone group across orders.py and invoices.py. stdout: {}",
         output.stdout
     );
+
+    let suppress_comment = groups
+        .iter()
+        .find_map(|group| {
+            group["actions"].as_array().and_then(|actions| {
+                actions
+                    .iter()
+                    .find(|action| action["type"] == "suppress-line")
+                    .and_then(|action| action["comment"].as_str())
+            })
+        })
+        .expect("expected a suppress-line action with a comment");
+    assert_eq!(
+        suppress_comment, "# fallow-ignore-next-line code-duplication",
+        "Python suppression comments must use `#`, not `//` (a SyntaxError waiting to happen)"
+    );
 }

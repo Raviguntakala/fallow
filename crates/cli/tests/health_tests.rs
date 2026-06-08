@@ -439,6 +439,17 @@ fn health_reports_python_function_complexity() {
     assert_eq!(tangled["cyclomatic"].as_u64(), Some(11));
     assert_eq!(tangled["param_count"].as_u64(), Some(4));
 
+    let suppress = tangled["actions"]
+        .as_array()
+        .expect("actions array")
+        .iter()
+        .find(|action| action["type"] == "suppress-line")
+        .expect("expected a suppress-line action on the Python finding");
+    assert_eq!(
+        suppress["comment"], "# fallow-ignore-next-line complexity",
+        "Python suppression comments must use `#`, not `//` (a SyntaxError waiting to happen)"
+    );
+
     // The trivial `simple` function stays below threshold and must not surface.
     assert!(
         !findings.iter().any(|finding| finding["name"] == "simple"),

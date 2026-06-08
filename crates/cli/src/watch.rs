@@ -609,11 +609,16 @@ mod tests {
     }
 
     #[test]
+    fn relevant_source_python_extensions() {
+        assert!(is_relevant_source(Path::new("script.py")));
+        assert!(is_relevant_source(Path::new("stubs.pyi")));
+    }
+
+    #[test]
     fn not_relevant_source() {
         assert!(!is_relevant_source(Path::new("README.md")));
         assert!(!is_relevant_source(Path::new("image.png")));
         assert!(!is_relevant_source(Path::new("data.json")));
-        assert!(!is_relevant_source(Path::new("script.py")));
         assert!(!is_relevant_source(Path::new("Cargo.toml")));
         assert!(!is_relevant_source(Path::new("no_extension")));
     }

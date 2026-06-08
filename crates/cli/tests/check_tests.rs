@@ -455,3 +455,46 @@ fn check_human_output_unused_deps_has_content() {
         "should list unused-dep"
     );
 }
+
+/// Asserts that every `key` finding in `json` points at a `.py` path and that
+/// any suggested suppression comment uses Python's `#` syntax, never JS `//`
+/// (which would be a `SyntaxError` if applied to a Python file).
+fn assert_hash_suppressions(json: &serde_json::Value, key: &str) {
+    let findings = json[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("{key} array"));
+    assert!(
+        !findings.is_empty(),
+        "fixture should report unused .py {key}"
+    );
+    for finding in findings {
+        let path = finding["path"].as_str().expect("path");
+        assert!(
+            std::path::Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("py")),
+            "expected a .py path, got {path}"
+        );
+        for action in finding["actions"].as_array().expect("actions") {
+            if let Some(comment) = action["comment"].as_str() {
+                assert!(
+                    comment.starts_with('#'),
+                    "Python suppression comment must use `#`, not `//` (a SyntaxError waiting to happen): {comment:?} on {path}"
+                );
+                assert!(
+                    !comment.starts_with("//"),
+                    "Python suppression comment must not use JS `//` syntax: {comment:?} on {path}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn python_findings_suggest_hash_suppression_comments() {
+    let output = run_fallow("check", "python/basic", &["--format", "json", "--quiet"]);
+    let json = parse_json(&output);
+
+    assert_hash_suppressions(&json, "unused_files");
+    assert_hash_suppressions(&json, "unused_exports");
+}
