@@ -127,6 +127,7 @@ impl<'src> ComplexityVisitor<'src> {
             line_count: end_line.saturating_sub(line) + 1,
             param_count: frame.param_count,
             source_hash,
+            contributions: Vec::new(),
         });
     }
 }
